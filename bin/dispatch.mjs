@@ -24,7 +24,15 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT = path.resolve(here, '..', '..', '..');
 
 function rootDir() {
-  return process.env.DSH_DISPATCH_ROOT ? path.resolve(process.env.DSH_DISPATCH_ROOT) : DEFAULT_ROOT;
+  if (process.env.DSH_DISPATCH_ROOT) return path.resolve(process.env.DSH_DISPATCH_ROOT);
+  // 三层顺序，避免"装在全局/npx 跑时把仓库根认成 npm 全局目录"这类误判（旧版只有第 2 层）：
+  //   1) 当前工作目录已有 dispatch/seats.json —— 用户就在自己的项目里跑，这是最常见也最该赢的
+  //   2) 本文件位置推导：monorepo 里 plugin/<pkg>/bin → 仓库根；npm 里 node_modules/<pkg>/bin → 项目根
+  //   3) 都没有配置时回退当前目录，让报错信息指向用户真正应该创建配置的地方
+  const cwd = process.cwd();
+  if (fs.existsSync(path.join(cwd, 'dispatch', 'seats.json'))) return cwd;
+  if (fs.existsSync(path.join(DEFAULT_ROOT, 'dispatch', 'seats.json'))) return DEFAULT_ROOT;
+  return cwd;
 }
 
 async function main(argv) {

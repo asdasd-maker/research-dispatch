@@ -1,6 +1,6 @@
 {
   "name": "research-dispatch",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Multi-model review dispatch for DeepSeek Harness: seats decide who reviews, votes decide how many seats run, every round lands on disk as cards.",
   "type": "module",
   "main": "./lib/index.js",
