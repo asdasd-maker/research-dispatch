@@ -63,5 +63,13 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asdasd-maker/research-dispatch.git"
+  },
+  "homepage": "https://github.com/asdasd-maker/research-dispatch#readme",
+  "bugs": {
+    "url": "https://github.com/asdasd-maker/research-dispatch/issues"
   }
 }
