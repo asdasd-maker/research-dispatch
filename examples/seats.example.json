@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "paths": {
+    "briefs_dir": "ideas/briefs",
+    "cards_dir": "ideas/cards",
+    "workers_dir": "workers",
+    "role_file": "roles/reviewer.md"
+  },
+  "default_backends": [
+    "codex",
+    "claude"
+  ],
+  "seats": [
+    {
+      "id": "codex",
+      "kind": "cli",
+      "enabled": true,
+      "command": "codex",
+      "argv": [
+        "exec",
+        "--sandbox",
+        "read-only",
+        "--skip-git-repo-check",
+        "-C",
+        "{workers_dir}",
+        "{optional_args}",
+        "-o",
+        "{tmp}",
+        "-"
+      ],
+      "payload_position": "stdin",
+      "output": "file",
+      "optional_args": [
+        {
+          "env": "CODEX_MODEL",
+          "argv": [
+            "-m",
+            "{env}"
+          ]
+        }
+      ],
+      "identity": {
+        "kind": "config",
+        "explicit_env": "CODEX_MODEL",
+        "file_env": "CODEX_CFG",
+        "default_file": "~/.codex/config.toml",
+        "pattern": "^model = \"[^\"]*\"",
+        "cut_field": 2
+      }
+    },
+    {
+      "id": "claude",
+      "kind": "cli",
+      "enabled": true,
+      "command": "claude",
+      "argv": [
+        "-p",
+        "{payload}",
+        "--output-format",
+        "text",
+        "--no-session-persistence",
+        "{optional_args}"
+      ],
+      "payload_position": "argv",
+      "output": "stdout",
+      "optional_args": [
+        {
+          "env": "CLAUDE_MODEL",
+          "argv": [
+            "--model",
+            "{env}"
+          ]
+        }
+      ],
+      "identity": {
+        "kind": "config",
+        "explicit_env": "CLAUDE_MODEL",
+        "file_env": "CLAUDE_CFG",
+        "default_file": "~/.claude/settings.json",
+        "pattern": "\"model\"\\s*:\\s*\"[^\"]*\"",
+        "cut_field": 2
+      }
+    },
+    {
+      "id": "manual",
+      "kind": "delivery",
+      "enabled": true,
+      "identity": {
+        "kind": "manual"
+      },
+      "body_env": "MANUAL_BODY",
+      "sha_env": "MANUAL_SHA"
+    }
+  ]
+}

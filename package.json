@@ -1,0 +1,67 @@
+{
+  "name": "research-dispatch",
+  "version": "1.0.1",
+  "description": "Multi-model review dispatch for DeepSeek Harness: seats decide who reviews, votes decide how many seats run, every round lands on disk as cards.",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./run": "./lib/run.mjs",
+    "./models": "./lib/models.mjs",
+    "./bin": "./bin/dispatch.mjs",
+    "./client": "./lib/client.js"
+  },
+  "bin": {
+    "research-dispatch": "./bin/dispatch.mjs"
+  },
+  "files": [
+    "lib/",
+    "bin/",
+    "skills/",
+    "cordis.patch.yml",
+    "examples/",
+    "test/*.selftest.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node test/flow.selftest.mjs && node test/client.selftest.mjs"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "multi-model",
+    "review",
+    "llm",
+    "codex",
+    "claude",
+    "qoder"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "author": "asdasd-maker",
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ]
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  }
+}

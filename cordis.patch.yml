@@ -1,0 +1,9 @@
+# DSH 插件装配：把本包作为 loader entry 插入 profile。
+#
+# entry 的 id 就是设置命名空间名（DSH 用 `configEditor.entries().find(row => row.options.id === ns)`
+# 定位可写目标），因此这里写 `research-dispatch`，与 lib/index.js 导出的 Config 同名。
+# name 是包名，两者职责不同，不能混为一谈。
+- insert:
+    - id: research-dispatch
+      name: research-dispatch
+      config: {}
