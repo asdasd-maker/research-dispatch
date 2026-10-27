@@ -179,7 +179,7 @@ npm test
 - **Windows 需要 Git Bash**（`bash.exe`）。会自动探测标准安装位与 `PATH`，也可用 `DSH_DISPATCH_BASH` 指定；显式排除 `system32\bash.exe`（WSL 转发器）。
 - 座位表里的 `anchor_checker` / `card_validator` 等**由使用者自己提供**：本包只按路径调用，不附带你的私有脚本。
 - 外部执行者（codex / claude / qoder / kimi）需自行安装并按各自方式登录；本包不代管凭据。
-- `research_dispatch` 工具的注册依赖当前 dsh-tools 的 `output.render` 契约；本版本（1.0.3）已对齐，旧版宿主请忽略此条。
+- `research_dispatch` 工具的注册依赖当前 dsh-tools 的 `output.render` 契约；本版本（1.0.4）已对齐，旧版宿主请忽略此条。
 - 设置卡片是手写浏览器 bundle，DSH 大版本升级后槽名可能变化，届时需要同步。
 
 ## 隐私

@@ -624,7 +624,13 @@ ok(call && call[0] === 'research-dispatch' && call[1].reviewVotes === 'codex:gpt
   const bad = ['C:/tmp/x.json', '/etc/x.json', '../outside.json', 'a/../../b.json', 'dispatch/notes.md'];
   ok(bad.every((v) => { try { host.Config({ seatsFile: v, repoRoot: repo }); return false; } catch { return true; } }),
     '④ Config 的 seatsFile 约束拒掉绝对路径 / .. / 非 .json');
-  ok(host.Config({ seatsFile: 'dispatch/seats.json', repoRoot: repo }).seatsFile === 'dispatch/seats.json', '④ 合法相对路径照常放行');
+  ok(host.plainValue(host.Config({ seatsFile: 'dispatch/seats.json', repoRoot: repo }).seatsFile) === 'dispatch/seats.json', '④ 合法相对路径照常放行');
+  // volatile 字段在装了 schemastery 的环境里会被包成 { get() }，没装则是裸值 —— 两种都得能用。
+  // 这条钉住 plainValue：否则同一个包在「裸 checkout」与「真装依赖」两种环境里给出相反结论。
+  ok(host.plainValue({ get: () => 'dispatch/seats.json' }) === 'dispatch/seats.json'
+    && host.plainValue('dispatch/seats.json') === 'dispatch/seats.json'
+    && host.plainValue(undefined) === undefined,
+    '④ volatile 包装与裸值都被 plainValue 正确解开');
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

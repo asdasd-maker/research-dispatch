@@ -22,6 +22,18 @@ const REPO = path.resolve(SRC, '..', '..');           // 仓库根
 const BIN = path.join(SRC, 'bin', 'dispatch.mjs');
 const RUNMJS = path.join(SRC, 'lib', 'run.mjs');
 const REAL_ANCHOR = path.join(REPO, 'dispatch', 'anchor_check.sh');
+// 包外（npm 安装后）仓库里没有 dispatch/ 这一层。§5 验的是「run.mjs 怎么把检查器的
+// 退出码与原文翻译成派工结论」，不是检查器本身，所以拿不到真脚本时用一个等价桩：
+// 同样的退出码、同样风格的一句原话。有真脚本时仍然用真的（monorepo 里保持真集成）。
+const REAL_ANCHOR_SRC = fs.existsSync(REAL_ANCHOR) ? fs.readFileSync(REAL_ANCHOR, 'utf8') : null;
+function checkerStub(kind) {
+  const m = {
+    rc4: ['!! baselines/_fx/REPRO.md §3 的“我复现”列没有任何数值 —— 论文列有数但自己还没复现出的，不算可用锚点', 4],
+    rc2: ['!! 找不到 python —— BB 一致性与 delta 对账都做不了（尺子不可用，退 2，不是锚点问题）', 2],
+    rc1: ['!! baselines/_fx/REPRO.md §4 没签字 —— 未验收的基线不能当锚点', 1],
+  }[kind];
+  return '#!/usr/bin/env bash\nset -uo pipefail\nprintf \'%s\\n\' \'' + m[0] + '\' >&2\nexit ' + m[1] + '\n';
+}
 
 let checks = 0, fails = 0;
 const ok = (m) => { checks++; console.log('  \x1b[32m✓\x1b[0m ' + m); };
@@ -272,17 +284,17 @@ try {
     'SIGNOFF: ________',
     '',
   ].join('\n');
-  function realCheckerFixture(tag, repro, checkerTransform) {
+  function realCheckerFixture(tag, repro, checkerTransform, fallbackKind) {
     const fx = mkFixture(tag, { defaultBackends: ['codex'], seats: [cliSeat('codex', 'node')] });
     fs.mkdirSync(path.join(fx.root, 'baselines', '_fx'), { recursive: true });
     fs.writeFileSync(path.join(fx.root, 'baselines', '_fx', 'REPRO.md'), repro);
-    let src = fs.readFileSync(REAL_ANCHOR, 'utf8');
-    if (checkerTransform) src = checkerTransform(src);
+    let src = REAL_ANCHOR_SRC !== null ? REAL_ANCHOR_SRC : checkerStub(fallbackKind);
+    if (checkerTransform && REAL_ANCHOR_SRC !== null) src = checkerTransform(src);
     fs.writeFileSync(path.join(fx.root, 'dispatch', 'anchor_check.sh'), src, { mode: 0o755 });
     return fx;
   }
   t('检查器退 4（§3 无数值）→ 退 8 工单不合格，并原样引用检查器那行', () => {
-    const fx = realCheckerFixture('anchor-rc4-nonum', REPRO_NONUM);
+    const fx = realCheckerFixture('anchor-rc4-nonum', REPRO_NONUM, null, 'rc4');
     const r = runDispatch(fx.root, ['run', 'ideas/briefs/idea_01.md']);
     assert.equal(r.rc, 8, '锚点/基线不可用应退 8，实得 ' + r.rc + '；输出：' + r.out.slice(-500));
     assert.ok(r.out.includes('没有任何数值'), '要引用检查器原文，实得：' + r.out.slice(-500));
@@ -292,16 +304,18 @@ try {
   });
   t('检查器退 2（python 不在 PATH 的那台机器）→ 退 2，引用"找不到 python"', () => {
     const MARK = '# 尺子自身的依赖先查';
-    assert.ok(fs.readFileSync(REAL_ANCHOR, 'utf8').includes(MARK), '真检查器里应有依赖检查的注释锚点');
+    if (REAL_ANCHOR_SRC !== null) {
+      assert.ok(REAL_ANCHOR_SRC.includes(MARK), '真检查器里应有依赖检查的注释锚点');
+    }
     const fx = realCheckerFixture('anchor-rc2-nopy', REPRO_NONUM, (src) => src.replace(MARK,
-      'export PATH=/run-selftest-no-python   # 夹具：模拟这台机器上没有 python\n\n' + MARK));
+      'export PATH=/run-selftest-no-python   # 夹具：模拟这台机器上没有 python\n\n' + MARK), 'rc2');
     const r = runDispatch(fx.root, ['run', 'ideas/briefs/idea_01.md']);
     assert.equal(r.rc, 2, '缺依赖应退 2，实得 ' + r.rc + '；输出：' + r.out.slice(-500));
     assert.ok(r.out.includes('找不到 python'), '要引用检查器原文，实得：' + r.out.slice(-500));
     assert.ok(r.out.includes('不是锚点问题'), '检查器那句"不是锚点问题"要原样传出来');
   });
   t('检查器退 1（锚点对不上）→ 仍退 8 工单不合格', () => {
-    const fx = realCheckerFixture('anchor-rc1', REPRO_NOSIGN);
+    const fx = realCheckerFixture('anchor-rc1', REPRO_NOSIGN, null, 'rc1');
     const r = runDispatch(fx.root, ['run', 'ideas/briefs/idea_01.md']);
     assert.equal(r.rc, 8, '锚点未签字应退 8，实得 ' + r.rc + '；输出：' + r.out.slice(-400));
     assert.ok(r.out.includes('锚点未通过'), '文案应仍是"锚点未通过"');
