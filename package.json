@@ -1,6 +1,6 @@
 {
   "name": "research-dispatch",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Multi-model review dispatch for DeepSeek Harness: seats decide who reviews, votes decide how many seats run, every round lands on disk as cards.",
   "type": "module",
   "main": "./lib/index.js",
@@ -18,14 +18,14 @@
     "lib/",
     "bin/",
     "skills/",
-    "cordis.patch.yml",
     "examples/",
-    "test/*.selftest.mjs",
+    "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "test/*.selftest.mjs"
   ],
   "scripts": {
-    "test": "node test/flow.selftest.mjs && node test/client.selftest.mjs"
+    "test": "node test/flow.selftest.mjs && node test/client.selftest.mjs && node test/run.selftest.mjs"
   },
   "keywords": [
     "deepseek-harness",
@@ -47,6 +47,14 @@
     "win32"
   ],
   "author": "asdasd-maker",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/asdasd-maker/research-dispatch.git"
+  },
+  "homepage": "https://github.com/asdasd-maker/research-dispatch#readme",
+  "bugs": {
+    "url": "https://github.com/asdasd-maker/research-dispatch/issues"
+  },
   "license": "MIT",
   "dsh": {
     "bundle": {
@@ -63,13 +71,5 @@
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/asdasd-maker/research-dispatch.git"
-  },
-  "homepage": "https://github.com/asdasd-maker/research-dispatch#readme",
-  "bugs": {
-    "url": "https://github.com/asdasd-maker/research-dispatch/issues"
   }
 }

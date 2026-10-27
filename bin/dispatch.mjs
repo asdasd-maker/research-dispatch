@@ -35,10 +35,38 @@ function rootDir() {
   return cwd;
 }
 
+const USAGE = [
+  '用法: dispatch.mjs <子命令> [参数]',
+  '',
+  '  run <工单>          跑完整一轮（= 旧的 bash dispatch/fanout.sh）',
+  '  plan <工单>         只打印本轮计划（JSON），不调用任何模型',
+  '  seats               打印生效的座位表',
+  '  review-models       三行模型身份（供 dispatch/models.sh）',
+  '  stages              三个非 bash 环节的执行者（JSON）',
+  '  stage-exec <环节>   某环节的 bash 命令',
+  '  stage-model <环节>  某环节的模型',
+  '  norm-model <串>     归一化模型名',
+  '  model-family <串>   家族名',
+  '  dsh-tag | qoder-tag | qoder-self',
+  '  seat-token <座位>   署名票的 attest token',
+  '  argv <座位>         展开该座位的 argv 模板',
+  '  resolve-model <显式> <配置文件> <正则> <字段>',
+  '  dsh-live            当前 dsh 活模型',
+  '',
+  '退出码: 0 正常 / 1 降级或用法错 / 2 基础设施不可用 / 3 本轮作废 / 8 工单不合格',
+].join('\n');
+
 async function main(argv) {
   const cmd = argv[0] || '';
   const rest = argv.slice(1);
   const root = rootDir();
+
+  // F2-6：--help / -h / 无参数是"问用法"，不是"基础设施故障"。旧版让它走末尾那条
+  // 用法 + return 2，而 2 在本包里专指"基础设施不可用"，脚本一调就以为环境坏了。
+  if (cmd === '' || cmd === '--help' || cmd === '-h' || cmd === 'help') {
+    process.stdout.write(USAGE + '\n');
+    return 0;
+  }
 
   if (cmd === 'run') {
     if (rest.length === 0) {
@@ -51,17 +79,8 @@ async function main(argv) {
       process.stdout.write('   （静默取第一个 = 第二单的票根本没生成，而退出码照样是 0）\n');
       return 1;
     }
-    try {
-      return await run({ root, briefArg: rest[0] });
-    } catch (e) {
-      // 配置坏掉是"基础设施不可用"（退 2），不是"材料不合格"（退 8），也不是普通失败（退 1）：
-      // 三种排查方向完全不同，混成一个码会把人支去查工单。
-      if (e && (e.code === 'NO_CONFIG' || e.code === 'BAD_CONFIG')) {
-        process.stderr.write('✗ ' + e.message + '\n');
-        return 2;
-      }
-      throw e;
-    }
+    // 配置坏掉（NO_CONFIG / BAD_CONFIG）由文件末尾的统一 catch 映射成可读原因 + 退 2。
+    return await run({ root, briefArg: rest[0] });
   }
 
   if (cmd === 'plan') {
@@ -176,7 +195,10 @@ async function main(argv) {
     return 0;
   }
 
-  process.stderr.write(['用法: dispatch.mjs <run|plan|seats|review-models|norm-model|model-family|dsh-tag|qoder-tag|qoder-self|seat-token|argv>', ''].join('\n'));
+  // F2-6：未知子命令仍退 2（调用方把它当"命令级不可用"），但文案必须先说清是"不认识这个
+  // 子命令"，不能让人以为是座位表/node/git bash 这类基础设施坏了。
+  process.stderr.write('✗ 未知子命令: ' + JSON.stringify(cmd) + ' —— 是命令名写错，不是环境问题\n');
+  process.stderr.write(USAGE + '\n');
   return 2;
 }
 
@@ -186,6 +208,13 @@ let code = 2;
 try {
   code = await main(process.argv.slice(2));
 } catch (e) {
-  process.stderr.write('✗ 未预期异常（按基础设施不可用退 2）：' + (e && e.stack ? e.stack : String(e)) + '\n');
+  // F2-7：座位表缺失/坏掉在任何子命令里都是"配置错"，不是"未预期异常"。此前只有 run 分支
+  // 捕获，seats / plan / review-models / stages / stage-model / argv 一律把配置错冒成整段栈 ——
+  // 而 loadConfig 的 message 里本来就写好了修法，打栈等于把它埋了。这里统一成一行可读原因 + 退 2。
+  if (e && (e.code === 'NO_CONFIG' || e.code === 'BAD_CONFIG')) {
+    process.stderr.write('✗ ' + e.message + '\n');
+  } else {
+    process.stderr.write('✗ 未预期异常（按基础设施不可用退 2）：' + (e && e.stack ? e.stack : String(e)) + '\n');
+  }
 }
 process.exitCode = code;

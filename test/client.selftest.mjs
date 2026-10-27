@@ -416,7 +416,7 @@ const REAL_SCHEMA = {
     },
   },
 };
-// 座位不是设置字段（按设计）；"跑哪几座"也不在面板上单独一格（按设计）。
+// 座位不是设置字段（按设计）；"跑哪几座"也不在面板上单独一格（并入评审票）。
 const ALL_KEYS = ['repoRoot', 'seatsFile', 'otherStages', 'stageOpinions', 'reviewVotes',
   'executorCatalog', 'divergeCommand', 'divergeModel'];
 
@@ -495,7 +495,7 @@ const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns
   ok(page.texts.some((t) => t.includes('正在连接设置服务')), '首帧是"正在连接设置服务…"（不是空白）');
   page = await settle(page);
 
-  // 座位区整块去掉（按设计），"默认座位"那一格也删了（按设计）。
+  // 座位区整块去掉（按设计），"默认座位"那一格也删了（它和评审票冲突）。
   const modelInputs = page.inputs.filter((p) => String(p.placeholder || '').includes('模型（留空'));
   ok(modelInputs.length === 0, '① 面板上没有逐座模型输入框（实际 ' + modelInputs.length + ' 个）');
   const optsOf = (p) => {
@@ -507,7 +507,7 @@ const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns
   ok(execSelects.length === 0, '① 面板上没有逐座执行方式下拉（实际 ' + execSelects.length + ' 个）');
   ok(!page.inputs.some((p) => String(p.placeholder || '').includes('空格分隔，如 codex claude dsh')),
     '① 「默认座位」输入框已删除（它和评审环节是同一件事，且票非空时它完全不生效）');
-  // 文案判据（按设计）：面向所有人，不出现路径 / 字段名 / 模型代号。
+  // 文案判据（用户要求）：面向所有人，不出现路径 / 字段名 / 模型代号。
   // 所以这里断的是**意图**而不是旧的字符串：票 = 一位评审员；想固定某人的模型有进阶指路。
   ok(page.texts.some((t) => t.includes('几位评审员')), '① 说明把「票」讲成「几位评审员」（不用"座位"这种内部说法）');
   ok(page.texts.some((t) => t.includes('配置文件')), '① 想固定某位评审员的模型去哪改：给了一句进阶指路（不暴露文件名）');
@@ -525,7 +525,7 @@ const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns
 
   ok(!/undefined/.test(page.texts.join(' ')), '没有 undefined 泄漏');
 
-  // ── 节序 = 科研流程顺序（按设计）──────────
+  // ── 节序 = 科研流程顺序（用户要求：别把评审放在最前面）──────────
   // 五节从上到下就是流程：文献调研 → 发散 → 评审 → 新颖度复查 → 实现与实验。
   // 这里用**精确等值**找标题（标题就是环节名本身），不用 startsWith —— 导语里那串流程名
   // 会先被命中，findIndex 就测不到标题的位置了。
@@ -594,7 +594,7 @@ const call = ctx2.__calls[0];
 ok(call && call[0] === 'research-dispatch' && call[1].reviewVotes === 'codex:gpt-9,' && call[2] === 7,
   'writePatch 调 update(命名空间, 只含改动的 patch, revision)');
 
-// ── 面板不写盘（按设计）────────────────────────────────────────────
+// ── 面板不写盘────────────────────────────────────────────
 // 判据反转了：以前验"保存即写穿到 seats.json"，现在面板不再持有座位配置
 // （座位与"跑哪几座"由评审票 + 座位表决定），所以验 **apply() 一个字节都不许动座位表**。
 {
