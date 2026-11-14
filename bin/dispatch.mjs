@@ -1,135 +1,819 @@
 #!/usr/bin/env node
-// 分派层的唯一入口。规划（谁去评、用哪个模型）与落地（调用、落卡、汇总）都在这里，
-// 一次调用做完 —— 调用方（dispatch/fanout.sh 这层壳、或 DSH 里的插件调用）不再各持一半状态。
-//
-// 用法：
-//   node lib/../bin/dispatch.mjs run <工单路径>          # 等价于旧的 bash dispatch/fanout.sh
-//   node bin/dispatch.mjs plan <工单路径>               # 只打印本轮计划（JSON），不调用任何模型
-//   node bin/dispatch.mjs seats                         # 打印生效的座位表
-//   node bin/dispatch.mjs review-models                 # 三行模型身份（供 dispatch/models.sh）
-//   node bin/dispatch.mjs norm-model <串>               # 归一化（同 dispatch/models.sh）
-//   node bin/dispatch.mjs model-family <串>             # 家族名
-//   node bin/dispatch.mjs dsh-tag | qoder-tag | qoder-self
-//   node bin/dispatch.mjs seat-token <座位名>
-//
-// 仓库根由本文件位置推出（bin → 插件包 → plugin/ → 仓库根），可用 DSH_DISPATCH_ROOT 覆盖。
+// 全链路纯 Node 普适研究流水线 CLI 主入口（v2.0.0）：
+// 覆盖一键初始化、跨宿主 Agent/模型探测、自由阵容编排、文献成池、基线监控、
+// 挂载负知识库的候选发散、自包含盲审拆单、仓外隔离多 Agent 评审、横向对比总表、
+// 前置查重、Pilot 配对 2σ 统计检验以及实验与消融契约哈希冻结。
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
-import { run } from '../lib/run.mjs';
-import { loadConfig, findSeat, seatIdentity, buildArgv, reviewModels, effectiveDefaultBackends, dshOverrides, seatKindOf } from '../lib/registry.mjs';
-import { normModel, modelFamily, dshTag, qoderTag, qoderSelfModel, seatAttestToken, resolveModel, dshLiveModel, expandHome } from '../lib/models.mjs';
+import { run, runDiverge } from '../lib/run.mjs';
+import {
+  loadConfig,
+  findSeat,
+  seatIdentity,
+  seatEnvName,
+  buildArgv,
+  reviewModels,
+  dshOverrides,
+  seatKindOf,
+  resolveExecutionPlan,
+  resolveDivergePlan,
+  discoverAgents,
+  updateLineup,
+} from '../lib/registry.mjs';
+import {
+  normModel,
+  modelFamily,
+  dshTag,
+  qoderTag,
+  qoderSelfModel,
+  seatAttestToken,
+  resolveModel,
+  dshLiveModel,
+  expandHome,
+} from '../lib/models.mjs';
+import {
+  scanPendingVerdicts,
+  summarizeTopic,
+} from '../lib/validators.mjs';
+import {
+  checkPaperCard,
+  assemblePaperPool,
+  makeBriefs,
+  checkNoveltyReport,
+  checkContractFile,
+  watchRepro,
+  initProject,
+} from '../lib/workflow.mjs';
+import {
+  computePairedStats,
+  formatPairedStatsReport,
+} from '../lib/pilot-stats.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_ROOT = path.resolve(here, '..', '..', '..');
 
 function rootDir() {
-  if (process.env.DSH_DISPATCH_ROOT) return path.resolve(process.env.DSH_DISPATCH_ROOT);
-  // 三层顺序，避免"装在全局/npx 跑时把仓库根认成 npm 全局目录"这类误判（旧版只有第 2 层）：
-  //   1) 当前工作目录已有 dispatch/seats.json —— 用户就在自己的项目里跑，这是最常见也最该赢的
-  //   2) 本文件位置推导：monorepo 里 plugin/<pkg>/bin → 仓库根；npm 里 node_modules/<pkg>/bin → 项目根
-  //   3) 都没有配置时回退当前目录，让报错信息指向用户真正应该创建配置的地方
+  const envRoot = String(process.env.DSH_DISPATCH_ROOT || '').trim();
+  if (envRoot) return path.resolve(envRoot);
+
   const cwd = process.cwd();
-  if (fs.existsSync(path.join(cwd, 'dispatch', 'seats.json'))) return cwd;
-  if (fs.existsSync(path.join(DEFAULT_ROOT, 'dispatch', 'seats.json'))) return DEFAULT_ROOT;
+  if (process.env.DSH_DISPATCH_CONFIG) return cwd;
+
+  // 1) 从当前工作目录向上查找包含 dispatch/seats.json 或 .flow/state.json 的项目根
+  let dir = path.resolve(cwd);
+  for (let i = 0; i < 5; i++) {
+    if (
+      fs.existsSync(path.join(dir, 'dispatch', 'seats.json'))
+      || fs.existsSync(path.join(dir, '.flow', 'state.json'))
+    ) {
+      return dir;
+    }
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+
+  // 2) 若显式处于 DSH 宿主覆盖作用域且配置了 repoRoot，采用该工作区根
+  const panelRoot = String(((dshOverrides().config || {}).repoRoot) || '').trim();
+  if (panelRoot) return path.resolve(panelRoot);
+
+  // 3) 仅当 cwd 位于 DEFAULT_ROOT 内部时才回退 DEFAULT_ROOT，避免在无关空目录运行时误串到其它项目
+  const norm = (p) => {
+    const clean = path.resolve(p).replace(/[\\/]+$/, '');
+    return process.platform === 'win32' ? clean.toLowerCase() : clean;
+  };
+  const cwdN = norm(cwd);
+  const defN = norm(DEFAULT_ROOT);
+  if (
+    (cwdN === defN || cwdN.startsWith(defN + path.sep))
+    && fs.existsSync(path.join(DEFAULT_ROOT, 'dispatch', 'seats.json'))
+  ) {
+    return DEFAULT_ROOT;
+  }
+
   return cwd;
 }
 
+function resolveUserPath(root, rawArg) {
+  const s = String(rawArg || '').trim();
+  if (!s) return '';
+  if (path.isAbsolute(s)) return path.resolve(s);
+  const fromCwd = path.resolve(process.cwd(), s);
+  if (fs.existsSync(fromCwd)) return fromCwd;
+  return path.resolve(root, s);
+}
+
+function parseCliFlags(args, { booleans = [], strings = [] } = {}) {
+  const boolSet = new Set(booleans);
+  const strSet = new Set(strings);
+  const flags = {};
+  const pos = [];
+
+  for (let i = 0; i < args.length; i++) {
+    const tok = String(args[i]);
+    if (tok === '--') {
+      pos.push(...args.slice(i + 1).map(String));
+      break;
+    }
+    if (!tok.startsWith('--') || tok === '-') {
+      pos.push(tok);
+      continue;
+    }
+    const eqIdx = tok.indexOf('=');
+    const key = eqIdx >= 0 ? tok.slice(2, eqIdx) : tok.slice(2);
+    const inlineVal = eqIdx >= 0 ? tok.slice(eqIdx + 1) : null;
+
+    if (boolSet.has(key)) {
+      if (inlineVal === null) {
+        flags[key] = true;
+      } else if (/^(true|1|yes)$/i.test(inlineVal)) {
+        flags[key] = true;
+      } else if (/^(false|0|no)$/i.test(inlineVal)) {
+        flags[key] = false;
+      } else {
+        return { ok: false, pos, flags, error: '布尔选项 --' + key + ' 不接受值 ' + JSON.stringify(inlineVal) };
+      }
+      continue;
+    }
+
+    if (strSet.has(key)) {
+      if (inlineVal !== null) {
+        flags[key] = inlineVal;
+      } else {
+        if (i + 1 >= args.length) {
+          return { ok: false, pos, flags, error: '选项 --' + key + ' 缺少参数值' };
+        }
+        flags[key] = String(args[++i]);
+      }
+      continue;
+    }
+
+    return { ok: false, pos, flags, error: '未知选项: ' + tok };
+  }
+
+  return { ok: true, pos, flags, error: '' };
+}
+
+function parseBoolToken(val) {
+  const s = String(val ?? '').trim().toLowerCase();
+  if (s === 'true' || s === '1' || s === 'yes' || s === 'on') return true;
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
+  return null;
+}
+
 const USAGE = [
-  '用法: dispatch.mjs <子命令> [参数]',
+  '用法: research-dispatch <子命令> [参数]',
   '',
-  '  run <工单>          跑完整一轮（= 旧的 bash dispatch/fanout.sh）',
-  '  plan <工单>         只打印本轮计划（JSON），不调用任何模型',
-  '  seats               打印生效的座位表',
-  '  review-models       三行模型身份（供 dispatch/models.sh）',
-  '  stages              三个非 bash 环节的执行者（JSON）',
-  '  stage-exec <环节>   某环节的 bash 命令',
-  '  stage-model <环节>  某环节的模型',
-  '  norm-model <串>     归一化模型名',
-  '  model-family <串>   家族名',
-  '  dsh-tag | qoder-tag | qoder-self',
-  '  seat-token <座位>   署名票的 attest token',
-  '  argv <座位>         展开该座位的 argv 模板',
-  '  resolve-model <显式> <配置文件> <正则> <字段>',
-  '  dsh-live            当前 dsh 活模型',
+  '  初始化与阵容编排：',
+  '    init [目录] [--force] [--topic <slug>]       在项目目录生成跨宿主研究流水线骨架（AGENTS.md / seats.json / 模板）',
+  '    agents [--json]                              探测本机已安装的 CLI Agent、API 环境变量及可用模型目录',
+  '    lineup [--review <spec>] [--diverge <spec>]  查看或持久化更新项目 dispatch/seats.json 的评审与发散阵容',
+  '           [--reset] [--require-unique-models] [--json]',
   '',
-  '退出码: 0 正常 / 1 降级或用法错 / 2 基础设施不可用 / 3 本轮作废 / 8 工单不合格',
+  '  全链路科研流水线（S0 → S6）：',
+  '    check-paper <card.md> [--json]               [S0] 校验单张文献卡 YAML 结构与必填字段',
+  '    pool [--cards <dir>] [--out <file>] [--dry]  [S0] 汇总合格文献卡生成 _pool.md（坏卡移入 rejected/）',
+  '    repro-watch <baseline_dir> [--log <file>]    [S1] 校验基线数据哈希与复现训练日志心跳',
+  '    diverge <方向> [条数=10] [--topic <slug>]    [S2] 调用选定 Agent 结合文献池、基线与可选 dead-ends.md 发散候选',
+  '            [--baseline <dir>] [--pool <file>] [--dead-ends <file> | --no-dead-ends] [--agent <seat[:model]>] [--dry]',
+  '    briefs <raw.md> [--topic <slug>]             [S3] 校验溯源与单条自包含性，拆分为盲审工单',
+  '           [--baseline <dir>] [--out <dir>] [--force] [--allow-reanchor]',
+  '    plan <工单> [--review <spec>]                [S4] 免费打印本轮评审计划（JSON），不调用任何模型',
+  '    run <工单> [--dry] [--review <spec>]         [S4] 仓外临时目录隔离跑完整一轮多 Agent 盲审落卡',
+  '    summary [--topic <slug>] [--out <file>]      [S4] 生成跨工单各票裁决、五维均分排序与核心理由对比总表 _summary.md',
+  '            [--sort rank|id] [--no-write] [--json]',
+  '    status [--topic <slug>] [--json]             [S5] 盘点待人工写 verdict-<id>.md 或未派工的工单',
+  '    check-novelty <report.md> [--json]           [S4.5] 校验入围候选的前置新颖度查重报告',
+  '    pilot-stats <armA> <armB>                    [S4.5] 计算 Pilot 双臂配对准确率、2σ MDE 与合规子集偏差',
+  '                [--compliant-field <k>] [--json]',
+  '    check-contract <contract.md> [--record]      [S6] 校验实验与消融契约并写入 5 列 CHANGELOG.md 哈希冻结',
+  '                   [--re-record --reason <text>]',
+  '',
+  '  底层诊断与模型工具：',
+  '    seats | review-models | stages | stage-exec <环节> | stage-model <环节>',
+  '    norm-model <串> | model-family <串> | dsh-live | dsh-tag | qoder-tag | qoder-self',
+  '    seat-token <座位> | argv <座位> | resolve-model <显式> <配置文件> <正则> <字段>',
+  '',
+  '退出码: 0 正常 / 1 内容不合规或降级或用法错 / 2 基础设施或输入缺失 / 3 显式异构门禁下塌缩作废 / 8 基线锚点不合格',
 ].join('\n');
 
-async function main(argv) {
+export async function main(argv) {
   const cmd = argv[0] || '';
   const rest = argv.slice(1);
   const root = rootDir();
 
-  // F2-6：--help / -h / 无参数是"问用法"，不是"基础设施故障"。旧版让它走末尾那条
-  // 用法 + return 2，而 2 在本包里专指"基础设施不可用"，脚本一调就以为环境坏了。
   if (cmd === '' || cmd === '--help' || cmd === '-h' || cmd === 'help') {
     process.stdout.write(USAGE + '\n');
     return 0;
   }
 
-  if (cmd === 'run') {
-    if (rest.length === 0) {
-      process.stderr.write('用法: dispatch.mjs run <工单>\n');
+  // ── 1) init ─────────────────────────────────────────────────────────────
+  if (cmd === 'init') {
+    const p = parseCliFlags(rest, { booleans: ['force', 'json'], strings: ['topic'] });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
       return 1;
     }
-    if (rest.length > 1) {
-      process.stdout.write('!! 只接受一个工单，多出来的是：' + rest.slice(1).join(' ') + '\n');
-      process.stdout.write('   一条命令扇一单：for f in a.md b.md; do bash dispatch/fanout.sh "$f"; done\n');
-      process.stdout.write('   （静默取第一个 = 第二单的票根本没生成，而退出码照样是 0）\n');
+    if (p.pos.length > 1) {
+      process.stderr.write('用法: dispatch.mjs init [目标目录] [--force] [--topic <slug>]\n');
       return 1;
     }
-    // 配置坏掉（NO_CONFIG / BAD_CONFIG）由文件末尾的统一 catch 映射成可读原因 + 退 2。
-    return await run({ root, briefArg: rest[0] });
+    const envRoot = String(process.env.DSH_DISPATCH_ROOT || '').trim();
+    const targetDir = p.pos[0]
+      ? path.resolve(process.cwd(), p.pos[0])
+      : (envRoot ? path.resolve(envRoot) : path.resolve(process.cwd()));
+    let res;
+    try {
+      res = initProject(targetDir, {
+        force: Boolean(p.flags.force),
+        topic: p.flags.topic || null,
+      });
+    } catch (e) {
+      process.stderr.write('✗ ' + (e && e.message ? e.message : String(e)) + '\n');
+      return 1;
+    }
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    } else {
+      process.stdout.write('✓ 已初始化研究项目目录: ' + targetDir + '\n');
+      if (Array.isArray(res.created) && res.created.length > 0) {
+        process.stdout.write('  新建文件 (' + res.created.length + '):\n');
+        for (const f of res.created) process.stdout.write('    + ' + f + '\n');
+      }
+      if (Array.isArray(res.skipped) && res.skipped.length > 0) {
+        process.stdout.write('  保留已有文件 (' + res.skipped.length + '，传 --force 可覆盖):\n');
+        for (const f of res.skipped) process.stdout.write('    = ' + f + '\n');
+      }
+      process.stdout.write('  下一步：运行 npx research-dispatch agents 查看可用模型，再用 npx research-dispatch lineup 编排阵容。\n');
+    }
+    return res.rc !== undefined ? res.rc : (res.ok === false ? 1 : 0);
   }
 
-  if (cmd === 'plan') {
-    const cfg = loadConfig(root);
-    const brief = rest[0];
-    if (!brief) { process.stderr.write('用法: dispatch.mjs plan <工单>\n'); return 1; }
-    const briefAbs = path.isAbsolute(brief) ? brief : path.join(root, brief);
-    const backends = (process.env.BACKENDS || (cfg.default_backends || []).join(' ')).split(/\s+/).filter(Boolean);
-    const plan = [];
-    for (const be of backends) {
-      const seat = findSeat(cfg, be);
-      if (!seat) { plan.push({ seat: be, error: 'unknown-seat' }); continue; }
-      const identity = seatIdentity(seat, { seat: be, payloadSha: process.env.FANOUT_PAYLOAD_SHA || '' });
-      const entry = {
-        seat: be, kind: seat.kind, enabled: seat.enabled !== false,
-        executor: seat.kind === 'cli' ? (seat.command || '') : seat.kind,
-        identity, proven: normModel(identity) !== 'unknown-check-config',
-      };
-      if (seat.kind === 'cli') {
-        entry.argv_template = seat.argv;
-        entry.patch = seat.patch_env ? (process.env[seat.patch_env] || seat.patch_default || '') : '';
-      }
-      if (seat.kind === 'delivery') {
-        entry.body_env = String(seat.body_env || '').replace('{SEAT_UPPER}', be.toUpperCase());
-        entry.declared_env = String(seat.model_env || '').replace('{SEAT_UPPER}', be.toUpperCase());
-      }
-      plan.push(entry);
+  // ── 2) agents ───────────────────────────────────────────────────────────
+  if (cmd === 'agents') {
+    const p = parseCliFlags(rest, { booleans: ['json'] });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
     }
-    process.stdout.write(JSON.stringify({ root, brief: briefAbs, config: cfg.__file, plan }, null, 2) + '\n');
+    const res = discoverAgents(root);
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return 0;
+    }
+    process.stdout.write('本机可用 Agent 与模型目录：\n');
+    for (const a of res.agents) {
+      const mark = a.installed ? '✓' : '·';
+      if (a.kind === 'api') {
+        const keys = (a.configured_keys && a.configured_keys.length) ? a.configured_keys.join(', ') : '未检测到 API Key 环境变量';
+        const def = a.default_model ? (' · 默认模型: ' + a.default_model) : '';
+        process.stdout.write('  [' + mark + '] api      (' + keys + def + ')\n');
+      } else {
+        const def = a.default_model || (a.installed ? '按 CLI 默认' : '未安装');
+        const cand = (a.models && a.models.length)
+          ? (' · 候选(' + a.models.length + '): ' + a.models.slice(0, 6).join(', ') + (a.models.length > 6 ? ' …' : ''))
+          : '';
+        process.stdout.write('  [' + mark + '] ' + a.id.padEnd(8, ' ') + ' 默认: ' + def + cand + '\n');
+      }
+    }
+    if (res.lineup) {
+      const revStr = Array.isArray(res.lineup.review) && res.lineup.review.length > 0
+        ? res.lineup.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat)).join(', ')
+        : res.lineup.default_backends.join(', ');
+      const divObj = res.lineup.diverge;
+      const divStr = divObj
+        ? (typeof divObj === 'string' ? divObj : (divObj.model ? (divObj.seat + ':' + divObj.model) : divObj.seat))
+        : '默认（按配置）';
+      process.stdout.write('\n当前项目阵容 (' + res.config + ')：\n');
+      process.stdout.write('  评审 (review) : ' + revStr + '\n');
+      process.stdout.write('  发散 (diverge): ' + divStr + '\n');
+      process.stdout.write('  强制异构门禁  : ' + (res.lineup.require_unique_models ? '开启 (require_unique_models=true)' : '关闭 (默认允许同模型自由组合)') + '\n');
+    }
     return 0;
   }
 
+  // ── 3) lineup ───────────────────────────────────────────────────────────
+  if (cmd === 'lineup') {
+    // 兼容 `--require-unique-models`（无值视为 true）与 `--require-unique-models false`（显式传布尔串）
+    const normRest = [];
+    for (let i = 0; i < rest.length; i++) {
+      const tok = String(rest[i]);
+      if (tok === '--require-unique-models' && i + 1 < rest.length && parseBoolToken(rest[i + 1]) !== null) {
+        normRest.push('--require-unique-models=' + rest[i + 1]);
+        i += 1;
+      } else {
+        normRest.push(tok);
+      }
+    }
+    const p = parseCliFlags(normRest, {
+      booleans: ['reset', 'json', 'require-unique-models', 'no-require-unique-models'],
+      strings: ['review', 'diverge'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    let requireUniqueModels;
+    if (p.flags['no-require-unique-models']) {
+      requireUniqueModels = false;
+    } else if (p.flags['require-unique-models'] !== undefined) {
+      requireUniqueModels = Boolean(p.flags['require-unique-models']);
+    }
+
+    const hasMutation = p.flags.review !== undefined
+      || p.flags.diverge !== undefined
+      || Boolean(p.flags.reset)
+      || requireUniqueModels !== undefined;
+
+    if (hasMutation) {
+      const updated = updateLineup(root, {
+        review: p.flags.review,
+        diverge: p.flags.diverge,
+        reset: Boolean(p.flags.reset),
+        requireUniqueModels,
+      });
+      if (p.flags.json) {
+        process.stdout.write(JSON.stringify(updated, null, 2) + '\n');
+      } else {
+        process.stdout.write('✓ 已更新项目阵容配置: ' + updated.file + '\n');
+        const rev = (updated.lineup && Array.isArray(updated.lineup.review))
+          ? updated.lineup.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat)).join(', ')
+          : updated.default_backends.join(', ');
+        const div = (updated.lineup && updated.lineup.diverge)
+          ? (updated.lineup.diverge.model ? (updated.lineup.diverge.seat + ':' + updated.lineup.diverge.model) : updated.lineup.diverge.seat)
+          : '默认（按配置）';
+        process.stdout.write('  评审阵容 (review) : ' + rev + '\n');
+        process.stdout.write('  发散座位 (diverge): ' + div + '\n');
+        process.stdout.write('  require_unique_models: ' + String(Boolean(updated.policy && updated.policy.require_unique_models)) + '\n');
+      }
+      return 0;
+    }
+
+    const cfg = loadConfig(root);
+    const planRes = resolveExecutionPlan(cfg);
+    const divRes = resolveDivergePlan(cfg);
+    const out = {
+      config: cfg.__file,
+      source: planRes.source,
+      require_unique_models: Boolean(cfg.policy && cfg.policy.require_unique_models === true),
+      review: planRes.ok ? planRes.slots : [],
+      diverge: divRes.ok ? { source: divRes.source, seat: divRes.seatId, model: divRes.model || '' } : { error: divRes.error },
+      ...(planRes.ok ? {} : { error: planRes.error }),
+    };
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+    } else {
+      process.stdout.write('当前生效阵容 (' + cfg.__file + ')：\n');
+      if (planRes.ok) {
+        process.stdout.write('  评审 (source=' + planRes.source + '): '
+          + planRes.slots.map((s) => (s.model ? (s.tag + '[' + s.seat + ':' + s.model + ']') : s.tag)).join(', ') + '\n');
+      } else {
+        process.stderr.write('  ✗ 评审计划异常: ' + planRes.error + '\n');
+      }
+      if (divRes.ok) {
+        process.stdout.write('  发散 (source=' + divRes.source + '): '
+          + divRes.seatId + (divRes.model ? (':' + divRes.model) : '') + '\n');
+      } else {
+        process.stderr.write('  ✗ 发散配置异常: ' + divRes.error + '\n');
+      }
+      process.stdout.write('  require_unique_models: ' + String(out.require_unique_models) + '\n');
+    }
+    return planRes.ok && divRes.ok ? 0 : 2;
+  }
+
+  // ── 4) check-paper & pool (S0) ──────────────────────────────────────────
+  if (cmd === 'check-paper') {
+    const p = parseCliFlags(rest, { booleans: ['json'] });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (!p.pos[0]) {
+      process.stderr.write('用法: dispatch.mjs check-paper <文献卡.md> [--json]\n');
+      return 1;
+    }
+    const cardAbs = resolveUserPath(root, p.pos[0]);
+    const res = checkPaperCard(cardAbs);
+    const rc = res.rc !== undefined ? res.rc : (res.ok ? 0 : 1);
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return rc;
+    }
+    if (res.stdout) process.stdout.write(String(res.stdout).replace(/\n?$/, '\n'));
+    if (res.stderr) process.stderr.write(String(res.stderr).replace(/\n?$/, '\n'));
+    if (res.ok && !res.stdout) {
+      process.stdout.write('✓ 文献卡校验通过: ' + p.pos[0] + '\n');
+    }
+    return rc;
+  }
+
+  if (cmd === 'pool') {
+    const p = parseCliFlags(rest, { booleans: ['dry', 'json'], strings: ['cards', 'out'] });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    const res = assemblePaperPool(root, {
+      cardsDir: p.flags.cards || 'papers/cards',
+      outFile: p.flags.out || 'papers/cards/_pool.md',
+      dry: Boolean(p.flags.dry),
+    });
+    const rc = res.rc !== undefined ? res.rc : (res.ok ? 0 : 1);
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return rc;
+    }
+    if (res.stdout) process.stdout.write(String(res.stdout).replace(/\n?$/, '\n'));
+    if (res.stderr) process.stderr.write(String(res.stderr).replace(/\n?$/, '\n'));
+    if (res.ok && !res.stdout) {
+      process.stdout.write('✓ 文献池组装完成: 合格 ' + (res.validCount ?? 0) + ' 张 → ' + (res.outPath || p.flags.out || 'papers/cards/_pool.md') + '\n');
+    }
+    return rc;
+  }
+
+  // ── 5) diverge (S2) ─────────────────────────────────────────────────────
+  if (cmd === 'diverge') {
+    const p = parseCliFlags(rest, {
+      booleans: ['dry', 'no-baseline', 'no-dead-ends'],
+      strings: ['topic', 'baseline', 'pool', 'dead-ends', 'agent'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (p.flags['dead-ends'] !== undefined && p.flags['no-dead-ends']) {
+      process.stderr.write('✗ --no-dead-ends 与 --dead-ends 不能同时指定（前者启用纯空白发散模式，后者显式挂载死胡同文件）\n');
+      return 1;
+    }
+    if (p.pos.length === 0) {
+      process.stderr.write('用法: dispatch.mjs diverge <方向描述> [条数=10] [--topic <slug>] [--baseline <dir>] [--pool <file>] [--dead-ends <file> | --no-dead-ends] [--agent <seat[:model]>] [--dry]\n');
+      return 1;
+    }
+    if (p.pos.length > 2) {
+      process.stderr.write('!! diverge 最多接受两个位置参数：<方向描述> [条数]，多余参数：' + p.pos.slice(2).join(' ') + '\n');
+      return 1;
+    }
+    return await runDiverge({
+      root,
+      direction: p.pos[0],
+      count: p.pos[1],
+      topic: p.flags.topic,
+      baselineDir: p.flags.baseline,
+      noBaseline: Boolean(p.flags['no-baseline']),
+      poolFile: p.flags.pool,
+      deadEndsFile: p.flags['dead-ends'],
+      noDeadEnds: Boolean(p.flags['no-dead-ends']),
+      agent: p.flags.agent,
+      dry: Boolean(p.flags.dry),
+    });
+  }
+
+  // ── 6) briefs (S3) ──────────────────────────────────────────────────────
+  if (cmd === 'briefs') {
+    const p = parseCliFlags(rest, {
+      booleans: ['force', 'allow-reanchor', 'allow-no-provenance', 'json'],
+      strings: ['baseline', 'topic', 'out'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (!p.pos[0]) {
+      process.stderr.write('用法: dispatch.mjs briefs <raw-pool.md> [--topic <slug>] [--baseline <dir>] [--out <dir>] [--force] [--allow-reanchor]\n');
+      return 1;
+    }
+    const rawAbs = resolveUserPath(root, p.pos[0]);
+    const res = makeBriefs(root, rawAbs, {
+      baselineDir: p.flags.baseline || null,
+      topic: p.flags.topic || null,
+      outDir: p.flags.out || null,
+      force: Boolean(p.flags.force),
+      allowReanchor: Boolean(p.flags['allow-reanchor']),
+      allowNoProvenance: Boolean(p.flags['allow-no-provenance']),
+    });
+    const rc = res.rc !== undefined ? res.rc : (res.ok ? 0 : 1);
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return rc;
+    }
+    if (res.stdout) process.stdout.write(String(res.stdout).replace(/\n?$/, '\n'));
+    if (res.stderr) process.stderr.write(String(res.stderr).replace(/\n?$/, '\n'));
+    if (res.ok && !res.stdout) {
+      process.stdout.write('✓ 已拆出工单 ' + ((res.created && res.created.length) || 0) + ' 份 → ' + (res.outDir || '') + '\n');
+    }
+    return rc;
+  }
+
+  // ── 7) run & plan (S4) ──────────────────────────────────────────────────
+  if (cmd === 'run') {
+    const p = parseCliFlags(rest, {
+      booleans: ['dry', 'calibration'],
+      strings: ['review'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (p.pos.length === 0) {
+      process.stderr.write('用法: dispatch.mjs run <工单>\n');
+      return 1;
+    }
+    if (p.pos.length > 1) {
+      process.stdout.write('!! 只接受一个工单，多出来的是：' + p.pos.slice(1).join(' ') + '\n');
+      process.stdout.write('   一条命令扇一单：for f in a.md b.md; do npx research-dispatch run "$f"; done\n');
+      process.stdout.write('   （静默取第一个 = 第二单的票根本没生成，而退出码照样是 0）\n');
+      return 1;
+    }
+    return await run({
+      root,
+      briefArg: p.pos[0],
+      dry: p.flags.dry ? true : undefined,
+      calibration: p.flags.calibration ? true : undefined,
+      reviewSpec: p.flags.review,
+    });
+  }
+
+  if (cmd === 'plan') {
+    const p = parseCliFlags(rest, { strings: ['review'] });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    const brief = p.pos[0];
+    if (!brief) {
+      process.stderr.write('用法: dispatch.mjs plan <工单>\n');
+      return 1;
+    }
+    const cfg = loadConfig(root);
+    const briefAbs = path.isAbsolute(brief) ? brief : path.join(root, brief);
+    const planRes = resolveExecutionPlan(cfg, p.flags.review !== undefined ? { reviewSpec: p.flags.review } : {});
+    if (!planRes.ok) {
+      process.stderr.write('✗ ' + planRes.error + '\n');
+      return 2;
+    }
+    const plan = [];
+    const provenNorms = [];
+    for (const sl of planRes.slots) {
+      const be = sl.seat;
+      const seat = findSeat(cfg, be);
+      if (!seat) {
+        plan.push({ slot: sl.tag, seat: be, error: 'unknown-seat' });
+        continue;
+      }
+      const voteModel = sl.model || '';
+      const effKind = seatKindOf(seat);
+      const identity = seatIdentity(seat, {
+        seat: sl.tag,
+        payloadSha: process.env.FANOUT_PAYLOAD_SHA || '',
+        voteModel,
+      });
+      const norm = normModel(identity);
+      const proven = Boolean(norm) && norm !== 'unknown-check-config';
+      if (proven) provenNorms.push(norm);
+      const entry = {
+        slot: sl.tag,
+        seat: be,
+        ...(voteModel ? { requested_model: voteModel } : {}),
+        kind: seat.kind,
+        effective_kind: effKind,
+        enabled: seat.enabled !== false,
+        executor: effKind === 'cli' ? (seat.command || 'cli') : effKind,
+        identity,
+        proven,
+      };
+      if (effKind === 'cli') {
+        entry.argv_template = seat.argv;
+        entry.patch = seat.patch_env ? (process.env[seat.patch_env] || seat.patch_default || '') : (seat.patch_default || '');
+      }
+      if (effKind === 'delivery') {
+        entry.body_env = seatEnvName(seat, 'body_env', sl.tag) || (sl.tag.toUpperCase() + '_BODY');
+        entry.declared_env = seatEnvName(seat, 'model_env', sl.tag) || (sl.tag.toUpperCase() + '_MODEL');
+      }
+      plan.push(entry);
+    }
+    const uniqProven = new Set(provenNorms);
+    const sharedModels = provenNorms.length >= 2 && uniqProven.size < provenNorms.length;
+    const requireUniqueModels = Boolean(
+      (cfg.policy && cfg.policy.require_unique_models === true)
+      || process.env.REQUIRE_UNIQUE_MODELS === '1'
+    );
+    process.stdout.write(JSON.stringify({
+      root,
+      brief: briefAbs,
+      config: cfg.__file,
+      source: planRes.source,
+      require_unique_models: requireUniqueModels,
+      shared_models: sharedModels,
+      ...(planRes.skippedVotes.length ? { skipped_votes: planRes.skippedVotes } : {}),
+      ...(planRes.duplicateVotes.length ? { duplicate_votes: planRes.duplicateVotes } : {}),
+      plan,
+    }, null, 2) + '\n');
+    return 0;
+  }
+
+  // ── 8) summary & status (S4 / S5) ───────────────────────────────────────
+  if (cmd === 'summary') {
+    const p = parseCliFlags(rest, {
+      booleans: ['no-write', 'json'],
+      strings: ['topic', 'out', 'sort'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    const sortBy = p.flags.sort !== undefined ? String(p.flags.sort).trim() : 'rank';
+    if (sortBy !== 'rank' && sortBy !== 'id') {
+      process.stderr.write('✗ --sort 仅支持 rank 或 id，实得: ' + JSON.stringify(p.flags.sort) + '\n');
+      return 1;
+    }
+    const res = summarizeTopic(root, {
+      topic: p.flags.topic || null,
+      writeFile: !p.flags['no-write'],
+      outPath: p.flags.out || null,
+      sortBy,
+    });
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return res.rc ?? 0;
+    }
+    process.stdout.write(String(res.markdown || '').replace(/\n?$/, '\n'));
+    if (!p.flags['no-write'] && res.outPath) {
+      const rel = path.relative(root, res.outPath).replace(/\\/g, '/');
+      process.stdout.write('\n✓ 横向对比总表已写入: ' + (rel.startsWith('..') ? res.outPath : rel) + '\n');
+    }
+    return res.rc ?? 0;
+  }
+
+  if (cmd === 'status') {
+    const p = parseCliFlags(rest, { booleans: ['json'], strings: ['topic'] });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    const res = scanPendingVerdicts(root, { topic: p.flags.topic || null });
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+    } else {
+      process.stdout.write(String(res.report || '') + '\n');
+    }
+    return res.rc;
+  }
+
+  // ── 9) check-novelty & pilot-stats (S4.5) ───────────────────────────────
+  if (cmd === 'check-novelty') {
+    const p = parseCliFlags(rest, { booleans: ['json'] });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (!p.pos[0]) {
+      process.stderr.write('用法: dispatch.mjs check-novelty <查重报告.md> [--json]\n');
+      return 1;
+    }
+    const repAbs = resolveUserPath(root, p.pos[0]);
+    const res = checkNoveltyReport(repAbs);
+    const rc = res.rc !== undefined ? res.rc : (res.ok ? 0 : 1);
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return rc;
+    }
+    if (res.stdout) process.stdout.write(String(res.stdout).replace(/\n?$/, '\n'));
+    if (res.stderr) process.stderr.write(String(res.stderr).replace(/\n?$/, '\n'));
+    if (res.ok && !res.stdout) {
+      process.stdout.write('✓ 查重报告校验通过: ' + p.pos[0] + '\n');
+    }
+    return rc;
+  }
+
+  if (cmd === 'pilot-stats') {
+    const p = parseCliFlags(rest, {
+      booleans: ['json', 'check-prompt'],
+      strings: ['compliant-field', 'id-field', 'item-field', 'correct-field', 'prompt-field', 'bootstrap', 'seed'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (p.pos.length < 2) {
+      process.stderr.write('用法: dispatch.mjs pilot-stats <armA.jsonl> <armB.jsonl> [--compliant-field <k>] [--json]\n');
+      return 1;
+    }
+    const armAAbs = resolveUserPath(root, p.pos[0]);
+    const armBAbs = resolveUserPath(root, p.pos[1]);
+    let stats;
+    try {
+      stats = computePairedStats(armAAbs, armBAbs, {
+        idField: p.flags['id-field'] || 'id',
+        itemField: p.flags['item-field'] || null,
+        correctField: p.flags['correct-field'] || 'correct',
+        promptField: p.flags['prompt-field'] || 'prompt',
+        compliantField: p.flags['compliant-field'] || null,
+        bootstrapIters: p.flags.bootstrap !== undefined ? Number(p.flags.bootstrap) : 1000,
+        seed: p.flags.seed !== undefined ? Number(p.flags.seed) : 42,
+        checkPromptMatch: Boolean(p.flags['check-prompt']),
+      });
+    } catch (e) {
+      if (e && e.code === 'ENOENT') {
+        process.stderr.write('✗ 找不到输入文件: ' + e.message + '\n');
+        return 2;
+      }
+      process.stderr.write('✗ ' + (e && e.message ? e.message : String(e)) + '\n');
+      return 1;
+    }
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(stats, null, 2) + '\n');
+    } else {
+      process.stdout.write(formatPairedStatsReport(stats));
+    }
+    return 0;
+  }
+
+  // ── 10) check-contract & repro-watch (S6 / S1) ──────────────────────────
+  if (cmd === 'check-contract') {
+    const p = parseCliFlags(rest, {
+      booleans: ['record', 're-record', 'json'],
+      strings: ['reason'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (!p.pos[0]) {
+      process.stderr.write('用法: dispatch.mjs check-contract <契约文件.md> [--record] [--re-record --reason <原因>]\n');
+      return 1;
+    }
+    const conAbs = resolveUserPath(root, p.pos[0]);
+    const res = checkContractFile(conAbs, {
+      rootDir: root,
+      record: Boolean(p.flags.record),
+      reRecord: Boolean(p.flags['re-record']),
+      reason: p.flags.reason || '',
+    });
+    const rc = res.rc !== undefined ? res.rc : (res.ok ? 0 : 1);
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return rc;
+    }
+    if (res.stdout) process.stdout.write(String(res.stdout).replace(/\n?$/, '\n'));
+    if (res.stderr) process.stderr.write(String(res.stderr).replace(/\n?$/, '\n'));
+    if (res.ok && !res.stdout) {
+      process.stdout.write('✓ 契约校验通过' + (res.sha12 ? (' (sha12:' + res.sha12 + ')') : '') + ': ' + p.pos[0] + '\n');
+    }
+    return rc;
+  }
+
+  if (cmd === 'repro-watch') {
+    const p = parseCliFlags(rest, {
+      booleans: ['json'],
+      strings: ['log', 'max-stale'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (!p.pos[0]) {
+      process.stderr.write('用法: dispatch.mjs repro-watch <基线目录> [--log <日志文件>] [--max-stale <秒>]\n');
+      return 1;
+    }
+    const baseAbs = resolveUserPath(root, p.pos[0]);
+    const logAbs = p.flags.log ? resolveUserPath(root, p.flags.log) : null;
+    const res = watchRepro(root, baseAbs, {
+      logPath: logAbs,
+      maxStaleSec: p.flags['max-stale'] !== undefined ? Number(p.flags['max-stale']) : 900,
+    });
+    const rc = res.rc !== undefined ? res.rc : (res.ok ? 0 : 1);
+    if (p.flags.json) {
+      process.stdout.write(JSON.stringify(res, null, 2) + '\n');
+      return rc;
+    }
+    if (res.stdout) process.stdout.write(String(res.stdout).replace(/\n?$/, '\n'));
+    if (res.stderr) process.stderr.write(String(res.stderr).replace(/\n?$/, '\n'));
+    return rc;
+  }
+
+  // ── 11) 兼容底层座位与模型诊断命令 ───────────────────────────────────────
   if (cmd === 'seats') {
     const cfg = loadConfig(root);
+    const planRes = resolveExecutionPlan(cfg);
     const rows = cfg.seats.map((s) => ({
-      // kind 是座位表里写的；executor 是**实际生效的**执行方式（面板 / executor_override
-      // 可以把它改掉）。两个都打出来 —— 只打 kind 会让"面板改成了 subagent"在诊断里看不见，
-      // 又是一次"界面与实跑各说一套"。
-      id: s.id, kind: s.kind, executor: seatKindOf(s), enabled: s.enabled !== false,
-      // payloadSha 走与 seat-token / plan 同一个格子：selfdeclared 座的署名票要拿它裁定
-      // "绑没绑上本轮 payload"，这里传空串会让 seat-token 与 seats 对同一座给出两个答案。
-      identity: seatIdentity(s, { seat: s.id, payloadSha: process.env.FANOUT_PAYLOAD_SHA || '' }),
+      id: s.id,
+      kind: s.kind,
+      executor: seatKindOf(s),
+      enabled: s.enabled !== false,
+      identity: seatIdentity(s, {
+        seat: s.id,
+        payloadSha: process.env.FANOUT_PAYLOAD_SHA || '',
+        voteModel: planRes.voteModels.get(s.id) || '',
+      }),
     }));
     process.stdout.write(JSON.stringify({
       config: cfg.__file,
-      // 文件里的默认值 vs 实际生效值：面板（DSH 设置）优先，这里两个都打出来，
-      // 免得"我明明在界面改了"和"seats.json 还是老值"各说一套却谁都看不见。
       default_backends: cfg.default_backends,
-      effective_default_backends: effectiveDefaultBackends(cfg),
+      effective_default_backends: planRes.ok ? planRes.backendList : [],
+      effective_slots: planRes.ok ? planRes.slots : [],
+      require_unique_models: Boolean(cfg.policy && cfg.policy.require_unique_models === true),
+      ...(planRes.ok ? {} : { plan_error: planRes.error }),
       settings_source: dshOverrides().source,
       seats: rows,
     }, null, 2) + '\n');
@@ -137,84 +821,107 @@ async function main(argv) {
   }
 
   if (cmd === 'stages') {
-    // 供主会话在调度 subagent 前读取：这三环不由 bash 派工，但选择存在这里。
-    const ov = dshOverrides().config || {};
+    const ov = dshOverrides({ forceProfileRead: true }).config || {};
     const raw = String(ov.stageOpinions || '');
     const rows = raw.split(';').map((t) => t.trim()).filter(Boolean).map((t) => {
-      const [stage, executor, ...rest] = t.split(':');
-      return { stage, executor: executor || '', model: rest.join(':') || '' };
+      const [stage, executor, ...tail] = t.split(':');
+      return {
+        stage: (stage || '').trim(),
+        executor: (executor || '').trim(),
+        model: tail.join(':').trim(),
+      };
     });
     process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
     return 0;
   }
+
   if (cmd === 'stage-exec') {
     const stage = rest[0] || '';
-    const ov = dshOverrides().config || {};
+    const ov = dshOverrides({ forceProfileRead: true }).config || {};
     const map = { diverge: 'divergeCommand' };
     const field = map[stage];
     process.stdout.write((field ? String(ov[field] || '').trim() : '') + '\n');
     return 0;
   }
+
   if (cmd === 'stage-model') {
-    // 供 bash 层读取某个环节的模型（目前只有 diverge 在 bash 里真调模型）
     const stage = rest[0] || '';
-    const cfg = loadConfig(root);
-    const ov = dshOverrides().config || {};
+    const ov = dshOverrides({ forceProfileRead: true }).config || {};
     const map = { diverge: 'divergeModel' };
     const field = map[stage];
     const v = field ? String(ov[field] || '').trim() : '';
     process.stdout.write((v || '') + '\n');
     return 0;
   }
+
   if (cmd === 'review-models') {
     const cfg = loadConfig(root);
     process.stdout.write(reviewModels(cfg).join('\n') + '\n');
     return 0;
   }
+
   if (cmd === 'resolve-model') {
-    // $1=显式值 $2=配置文件 $3=正则 $4=cut 字段（与旧 bash 函数同签名，供 dispatch/models.sh 转发）
     const [explicit, file, pattern, cut] = rest;
-    process.stdout.write(resolveModel(explicit || '', expandHome(file || ''), pattern || '', Number(cut || 2)) + '\n');
+    const cutNum = cut === undefined || cut === '' ? 2 : Number(cut);
+    process.stdout.write(resolveModel(explicit || '', expandHome(file || ''), pattern || '', cutNum) + '\n');
     return 0;
   }
+
   if (cmd === 'dsh-live') { process.stdout.write(dshLiveModel() + '\n'); return 0; }
   if (cmd === 'norm-model') { process.stdout.write(normModel(rest[0] || '') + '\n'); return 0; }
   if (cmd === 'model-family') { process.stdout.write(modelFamily(rest[0] || '') + '\n'); return 0; }
   if (cmd === 'dsh-tag') { process.stdout.write(dshTag() + '\n'); return 0; }
   if (cmd === 'qoder-tag') { process.stdout.write(qoderTag() + '\n'); return 0; }
   if (cmd === 'qoder-self') { process.stdout.write(qoderSelfModel() + '\n'); return 0; }
+
   if (cmd === 'seat-token') {
-    process.stdout.write(seatAttestToken(rest[0] || '', process.env.FANOUT_PAYLOAD_SHA || '') + '\n');
+    const seatName = rest[0] || '';
+    let seatDef = null;
+    try {
+      const cfg = loadConfig(root);
+      seatDef = findSeat(cfg, seatName);
+    } catch { /* 无座位表时退回默认约定 */ }
+    process.stdout.write(seatAttestToken(seatName, process.env.FANOUT_PAYLOAD_SHA || '', seatDef) + '\n');
     return 0;
   }
+
   if (cmd === 'argv') {
     const cfg = loadConfig(root);
     const seat = findSeat(cfg, rest[0] || '');
     if (!seat) { process.stderr.write('没有这个座位\n'); return 2; }
-    process.stdout.write(buildArgv(seat, { workersDir: 'workers', tmp: '/tmp/x', payloadText: 'PAYLOAD', patch: 'dispatch/dsh-review.patch.yml' }).join('\n') + '\n');
+    process.stdout.write(buildArgv(seat, {
+      workersDir: 'workers',
+      tmp: '/tmp/x',
+      payloadText: 'PAYLOAD',
+      patch: 'dispatch/dsh-review.patch.yml',
+    }).join('\n') + '\n');
     return 0;
   }
 
-  // F2-6：未知子命令仍退 2（调用方把它当"命令级不可用"），但文案必须先说清是"不认识这个
-  // 子命令"，不能让人以为是座位表/node/git bash 这类基础设施坏了。
   process.stderr.write('✗ 未知子命令: ' + JSON.stringify(cmd) + ' —— 是命令名写错，不是环境问题\n');
   process.stderr.write(USAGE + '\n');
   return 2;
 }
 
-// 未预期异常一律映射到 2（基础设施不可用）。散到 1 的后果最坏：1 的契约含义是"降级轮、
-// 票有效，只是不齐"，人会去读一份根本没写出来的 manifest，而真正的病因只留在栈里。
-let code = 2;
-try {
-  code = await main(process.argv.slice(2));
-} catch (e) {
-  // F2-7：座位表缺失/坏掉在任何子命令里都是"配置错"，不是"未预期异常"。此前只有 run 分支
-  // 捕获，seats / plan / review-models / stages / stage-model / argv 一律把配置错冒成整段栈 ——
-  // 而 loadConfig 的 message 里本来就写好了修法，打栈等于把它埋了。这里统一成一行可读原因 + 退 2。
-  if (e && (e.code === 'NO_CONFIG' || e.code === 'BAD_CONFIG')) {
-    process.stderr.write('✗ ' + e.message + '\n');
-  } else {
-    process.stderr.write('✗ 未预期异常（按基础设施不可用退 2）：' + (e && e.stack ? e.stack : String(e)) + '\n');
+function isDirectExecution() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(path.resolve(process.argv[1]));
+  } catch {
+    return path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
   }
 }
-process.exitCode = code;
+
+if (isDirectExecution()) {
+  let code = 2;
+  try {
+    code = await main(process.argv.slice(2));
+  } catch (e) {
+    if (e && (e.code === 'NO_CONFIG' || e.code === 'BAD_CONFIG')) {
+      process.stderr.write('✗ ' + e.message + '\n');
+    } else {
+      process.stderr.write('✗ 未预期异常（按基础设施不可用退 2）：' + (e && e.stack ? e.stack : String(e)) + '\n');
+    }
+  }
+  process.exitCode = code;
+}

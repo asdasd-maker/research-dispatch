@@ -1,8 +1,8 @@
-# DSH 插件装配：把本包作为 loader entry 插入 profile。
+# DSH 插件装配：将 research-dispatch 作为 loader entry 插入当前 profile。
 #
-# entry 的 id 就是设置命名空间名（DSH 用 `configEditor.entries().find(row => row.options.id === ns)`
-# 定位可写目标），因此这里写 `research-dispatch`，与 lib/index.js 导出的 Config 同名。
-# name 是包名，两者职责不同，不能混为一谈。
+# entry 的 id 即设置面板读写的配置命名空间名（与 lib/index.js 导出的 Config 对齐）。
+# 本文件中的 config 仅在 DSH 宿主内部生效（useDshPatch: true），不会跨宿主覆盖外部终端或
+# Antigravity / Claude Code / Codex / Cursor 工作区下的 dispatch/seats.json 单一真源。
 - insert:
     - id: research-dispatch
       name: research-dispatch

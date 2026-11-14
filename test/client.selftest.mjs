@@ -1,11 +1,11 @@
 // 设置页自检：无浏览器、无真 React、无网络。
 //   node plugin/research-dispatch/test/client.selftest.mjs
 //
-// 这把尺子的判据（改过一轮：以前 41 条全绿但测的是生产走不到的分支）：
+// 这把尺子的判据：
 //   · schema 用**真实形状** —— schemastery 的 toJSON() 是 { uid, refs }，没有 properties 键；
 //   · 不 grep 源码，能真调用的都真调用（readModelDirectories / mergeCatalog / catalogOf / fieldsOf）；
 //   · 渲染断言用带状态的极简 hook，页面能真的走到"连上 / 命名空间缺失 / 连不上"三条分支；
-//   · 写穿链路（面板保存 → seats.json）有独立用例，这是最重要的一条。
+//   · 验证宿主侧 apply() 零落盘（不改写 seats.json，默认不往 ~/.dsh 写诊断垃圾日志）。
 import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -158,17 +158,19 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
   const fallback = mod.__test.panelCatalog(staticValue, noCtx).find((c) => c.exec === 'dsh');
   ok(fallback && fallback.models.includes('cline-pass/old-a'), '拿不到宿主目录时退回静态探测（不是空清单）');
 
-  // 拿到宿主目录后：dsh / subagent 两行被覆盖，不是并集
+  // 拿到宿主目录后：dsh 行以宿主目录为准，幻影 subagent 被过滤剔除
   mod.__test.setLiveGroups(groups);
   const patched = mod.__test.panelCatalog(staticValue, noCtx);
   const dsh = patched.find((c) => c.exec === 'dsh');
   const sub = patched.find((c) => c.exec === 'subagent');
   ok(dsh && dsh.models.length === 5 && !dsh.models.includes('cline-pass/old-a'),
     'dsh 行以宿主目录为准（旧的 cline-pass/old-a 已被覆盖，不是并集）');
-  ok(sub && JSON.stringify(sub.models) === JSON.stringify(dsh.models), 'subagent 与 dsh 同源（subagent 继承会话模型）');
+  ok(!sub && JSON.stringify(mod.__test.REVIEW_SEATS) === JSON.stringify(['codex', 'claude', 'dsh', 'gemini', 'api'])
+    && JSON.stringify(mod.__test.DIVERGE_SEATS) === JSON.stringify(['codex', 'claude', 'dsh', 'gemini', 'api', 'kimi']),
+    '面板过滤掉不存在座位的幻影 subagent，评审支持 5 座（含 gemini）、发散全解锁 6 座');
   ok(patched.find((c) => c.exec === 'codex').models.includes('gpt-6.1-sol')
     && patched.find((c) => c.exec === 'kimi').models.includes('sensenova/kimi-k3'),
-    'codex / kimi 这些外部 CLI 座位不受影响（只覆盖 dsh / subagent）');
+    'codex / kimi 这些外部 CLI 座位不受影响（只覆盖 dsh）');
   ok((globalThis.window.__researchDispatch || {}).liveCatalog === undefined
     || typeof globalThis.window.__researchDispatch.liveCatalog === 'string',
     '宿主目录命中时诊断里记下分组（__researchDispatch.liveCatalog）');
@@ -416,7 +418,7 @@ const REAL_SCHEMA = {
     },
   },
 };
-// 座位不是设置字段（按设计）；"跑哪几座"也不在面板上单独一格（并入评审票）。
+// 座位是数据文件而非设置字段；"跑哪几座"并入评审票。
 const ALL_KEYS = ['repoRoot', 'seatsFile', 'otherStages', 'stageOpinions', 'reviewVotes',
   'executorCatalog', 'divergeCommand', 'divergeModel'];
 
@@ -433,12 +435,13 @@ const ALL_KEYS = ['repoRoot', 'seatsFile', 'otherStages', 'stageOpinions', 'revi
   ok(fields.find((f) => f.key === 'reviewVotes').description.includes('评审票'), 'meta.description 被带进字段说明');
 }
 
-// 回归：schema 完全缺失时（describe 只给了 value），仍要退到 value 的键
+// 回归（P1-6）：schema 完全缺失时（describe 只给了 value），必须合并完整已知字段集防止丢键或锁死保存按钮
 {
-  const noSchema = { ns: 'research-dispatch', value: { reviewVotes: 'codex:gpt-9,', stageOpinions: '' } };
+  const noSchema = { ns: 'research-dispatch', value: { reviewVotes: 'codex:gpt-9,' } };
   const f2 = mod.__test.fieldsOf(noSchema);
-  ok(f2.length === 2, 'schema 缺失时按 value 的键生成字段');
-  ok(f2.some((f) => f.key === 'reviewVotes' && f.title === '评审票'), '兜底字段仍有可读标题');
+  ok(f2.length === 8, 'schema 缺失时合并完整 8 个已知字段（实际 ' + f2.length + ' 个）');
+  ok(f2.some((f) => f.key === 'reviewVotes' && f.title === '评审票')
+    && f2.some((f) => f.key === 'divergeCommand'), '兜底字段保留可读标题与全部可编辑键');
 }
 
 // ── 渲染：用真状态跑页面，三条分支各来一次 ──────────────────────────
@@ -482,10 +485,10 @@ async function settle(page) {
   return render();
 }
 
-// ① 连通 + 有本命名空间 → 面板上只该有"评审票 / 发散 / 其余环节"三块，没有座位区
+// ① 连通 + 有本命名空间 → 路线 A 诚实双节（仅「评审」与「发散」，无零消费者摆设区）
 const FULL_VALUE = {
   repoRoot: '/repo', seatsFile: 'dispatch/seats.json',
-  otherStages: 'x', stageOpinions: '', reviewVotes: '', executorCatalog: 'codex:gpt-6.1-sol;claude:opus;dsh:;api:;qoder:',
+  otherStages: 'x', stageOpinions: '', reviewVotes: '', executorCatalog: 'codex:gpt-6.1-sol;claude:opus;dsh:;api:;kimi:sensenova/kimi-k3',
   divergeCommand: '', divergeModel: '',
 };
 const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 7, user: {}, value: FULL_VALUE, schema: REAL_SCHEMA }] } }), update: async () => ({ ok: true, value: {} }) };
@@ -495,7 +498,6 @@ const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns
   ok(page.texts.some((t) => t.includes('正在连接设置服务')), '首帧是"正在连接设置服务…"（不是空白）');
   page = await settle(page);
 
-  // 座位区整块去掉（按设计），"默认座位"那一格也删了（它和评审票冲突）。
   const modelInputs = page.inputs.filter((p) => String(p.placeholder || '').includes('模型（留空'));
   ok(modelInputs.length === 0, '① 面板上没有逐座模型输入框（实际 ' + modelInputs.length + ' 个）');
   const optsOf = (p) => {
@@ -504,43 +506,38 @@ const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns
     return out;
   };
   const execSelects = page.selects.filter((p) => optsOf(p).some((o) => o.value === 'subagent'));
-  ok(execSelects.length === 0, '① 面板上没有逐座执行方式下拉（实际 ' + execSelects.length + ' 个）');
+  ok(execSelects.length === 0, '① 面板任何下拉都不含无后端座位的 subagent（实际 ' + execSelects.length + ' 个）');
   ok(!page.inputs.some((p) => String(p.placeholder || '').includes('空格分隔，如 codex claude dsh')),
     '① 「默认座位」输入框已删除（它和评审环节是同一件事，且票非空时它完全不生效）');
-  // 文案判据（用户要求）：面向所有人，不出现路径 / 字段名 / 模型代号。
-  // 所以这里断的是**意图**而不是旧的字符串：票 = 一位评审员；想固定某人的模型有进阶指路。
   ok(page.texts.some((t) => t.includes('几位评审员')), '① 说明把「票」讲成「几位评审员」（不用"座位"这种内部说法）');
   ok(page.texts.some((t) => t.includes('配置文件')), '① 想固定某位评审员的模型去哪改：给了一句进阶指路（不暴露文件名）');
   const JARGON = /dispatch\/|\.sh\b|\.json|default_backends|seats\[|model_override|executor_override|subagent|tmux|kimi-k3|命名空间|网关/;
   ok(!page.texts.some((t) => JARGON.test(t)), '面板文案里没有文件路径 / 字段名 / 模型代号（面向所有人）');
   ok(!page.texts.includes('codexModel') && !page.texts.includes('seatOverrides') && !page.texts.includes('seatRoster'),
     '⑩ 座位相关的键名一个都不出现在面板上');
-  ok(!page.texts.includes('stageOpinions'), '⑩ stageOpinions 只由专用控件渲染一次');
+  ok(!page.texts.includes('stageOpinions'), '⑩ 废弃的 stageOpinions 归入隐藏，不进高级项');
   ok(page.texts.filter((t) => t === 'divergeCommand' || t === 'divergeModel').length === 0,
     '⑩ divergeCommand / divergeModel 只由「发散环节」下拉渲染，不再在「高级项」里重复一次');
   ok(page.texts.filter((t) => t === '高级项').length === 0,
-    '⑩ 每个字段都有专用控件时，「高级项」整块不渲染（不留空标题）');
+    '⑩ 每个字段都有专用控件或隐藏时，「高级项」整块不渲染（不留空标题）');
   ok(!page.texts.some((t) => t === 'repoRoot' || t === 'seatsFile' || t === 'executorCatalog' || t === 'otherStages'),
     '元信息（repoRoot / seatsFile / executorCatalog / otherStages）仍然隐藏');
 
   ok(!/undefined/.test(page.texts.join(' ')), '没有 undefined 泄漏');
 
-  // ── 节序 = 科研流程顺序（用户要求：别把评审放在最前面）──────────
-  // 五节从上到下就是流程：文献调研 → 发散 → 评审 → 新颖度复查 → 实现与实验。
-  // 这里用**精确等值**找标题（标题就是环节名本身），不用 startsWith —— 导语里那串流程名
-  // 会先被命中，findIndex 就测不到标题的位置了。
-  const FLOW = ['文献调研', '发散', '评审', '新颖度复查', '实现与实验'];
+  // ── 路线 A 诚实两节结构：评审 → 发散（砍掉 3 个无后端消费者的「只登记」摆设区）──
+  const FLOW = ['评审', '发散'];
   const pos = FLOW.map((n) => page.texts.findIndex((t) => t === n));
-  ok(pos.every((i) => i >= 0), '五节标题都在且就是环节名（' + FLOW.join(' / ') + '）');
-  ok(pos.every((v, i) => i === 0 || pos[i - 1] < v),
-    '节序 = 科研流程：' + FLOW.join(' → ') + '（实际 ' + pos.join(' < ') + '）');
-  // 「只登记」这个性质不能靠分组名称承担了（分组已改成环节名），必须每节自带标记。
-  ok(page.texts.filter((t) => t.includes('只登记由谁做')).length === 3,
-    '三个"只登记"的环节各自带一句标记（文献调研 / 新颖度复查 / 实现与实验）');
-  ok(page.texts.some((t) => t.includes('文献调研 → 发散 → 评审 → 新颖度复查 → 实现与实验')),
-    '导语里也写着这条流程（标题之外再给一次整体顺序）');
+  ok(pos.every((i) => i >= 0), '两节标题都在且就是环节名（' + FLOW.join(' / ') + '）');
+  ok(pos[0] < pos[1], '节序 = 评审 → 发散（实际 ' + pos.join(' < ') + '）');
+  ok(!page.texts.some((t) => t === '文献调研' || t === '新颖度复查' || t === '实现与实验' || t.includes('只登记由谁做')),
+    '已砍掉三个零后端消费者的「只登记」摆设区块');
+  ok(page.texts.some((t) => t.includes('科研派工 · 评审与发散')),
+    '主标题准确对齐「科研派工 · 评审与发散」');
+  ok(page.texts.join('').includes('默认（按配置） · 默认'),
+    'divergeCommand 留空时如实展示「默认（按配置） · 默认」（不再绑定死特定 Agent）');
 
-  // 受控组件真的读 draft：点"加一票"后重渲染，票数从 3 变 4
+  // 受控组件真的读 draft：点"加一票"后票数 +1，再点"删除"允许删空回 0 票（保存 "" 恢复默认阵容）
   const addBtn = page.buttons.find((b) => String(b.children || '').includes('加一票'));
   ok(!!addBtn && typeof addBtn.onClick === 'function', '有「加一票」按钮');
   const votesBefore = page.texts.filter((t) => /^票 \d+$/.test(t)).length;
@@ -548,6 +545,11 @@ const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns
   const page2 = render();
   const votesAfter = page2.texts.filter((t) => /^票 \d+$/.test(t)).length;
   ok(votesAfter === votesBefore + 1, '票是受控的：点「加一票」→ draft 变化 → 重渲染多一行（' + votesBefore + ' → ' + votesAfter + '）');
+  const delBtn = page2.buttons.find((b) => String(b.children || '') === '删除');
+  ok(!!delBtn && typeof delBtn.onClick === 'function', '新增票行带可点击「删除」按钮');
+  delBtn.onClick();
+  const page3 = render();
+  ok(page3.texts.filter((t) => /^票 \d+$/.test(t)).length === 0, '允许删空最后一票回到 0 票默认阵容态（P2-1）');
 }
 
 // ①-b 升级残留：设置文档里若还留着上一版的 seatOverrides / seatRoster 键，
@@ -569,14 +571,16 @@ const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns
   ok(!page.texts.some((t) => t.includes('连不上设置服务')), '⑦ 这种情况不许被误报成"连不上设置服务"');
 }
 
-// ⑦ 分支二：describe 直接抛 → 才是"连不上网关"
+// ⑦ 分支二：describe 直接抛 → 才是"连不上设置服务"
 {
   mount({ remote: { settings: { describe: async () => { throw new Error('RPC 断开'); } } } });
   const page = await settle(render());
   ok(page.texts.some((t) => t.includes('连不上设置服务') && t.includes('RPC 断开')), '⑦ describe 抛错 → "连不上设置服务（RPC 断开）"');
   ok(!page.texts.some((t) => t.includes('本页暂时没有可编辑项')), '⑦ 不要反过来把连接故障说成"没有可编辑项"');
-  ok(page.texts.some((t) => t.includes('科研派工 · 评审与环节')) && page.texts.some((t) => t.includes('文献调研')),
-    '连不上服务时首屏骨架仍在（不是整页空白）');
+  ok(page.texts.some((t) => t.includes('科研派工 · 评审与发散')) && page.texts.some((t) => t === '评审') && page.texts.some((t) => t === '发散'),
+    '连不上服务时首屏两节骨架仍在（不是整页空白）');
+  const addBtn = page.buttons.find((b) => String(b.children || '').includes('加一票'));
+  ok(!!addBtn && addBtn.disabled === true, '断连态（!live）下加票等编辑按钮全部禁用');
 }
 
 // ── 写回：update(ns, patch, revision) ─────────────────────────────
@@ -594,12 +598,17 @@ const call = ctx2.__calls[0];
 ok(call && call[0] === 'research-dispatch' && call[1].reviewVotes === 'codex:gpt-9,' && call[2] === 7,
   'writePatch 调 update(命名空间, 只含改动的 patch, revision)');
 
-// ── 面板不写盘────────────────────────────────────────────
-// 判据反转了：以前验"保存即写穿到 seats.json"，现在面板不再持有座位配置
-// （座位与"跑哪几座"由评审票 + 座位表决定），所以验 **apply() 一个字节都不许动座位表**。
+// ── 面板不写盘 & 默认不污染用户主目录（GP-08）──────────────────────────
 {
   const host = await import(new URL('../lib/index.js', import.meta.url).href);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-wt-'));
+  const fakeHome = path.join(tmp, 'clean-home');
+  fs.mkdirSync(fakeHome, { recursive: true });
+  const prevDiag = process.env.RESEARCH_DISPATCH_DIAG;
+  const prevDshHome = process.env.DSH_HOME;
+  delete process.env.RESEARCH_DISPATCH_DIAG;
+  process.env.DSH_HOME = path.join(fakeHome, '.dsh');
+
   const repo = path.join(tmp, 'repo');
   const seatsFile = path.join(repo, 'dispatch', 'seats.json');
   fs.mkdirSync(path.dirname(seatsFile), { recursive: true });
@@ -616,6 +625,10 @@ ok(call && call[0] === 'research-dispatch' && call[1].reviewVotes === 'codex:gpt
   host.apply({ logger: () => {}, on: (evt) => events.push(evt) },
     { repoRoot: repo, seatsFile: 'dispatch/seats.json', reviewVotes: 'codex:gpt-9,' });
   ok(fs.readFileSync(seatsFile, 'utf8') === before, '面板保存不写盘：apply() 不碰 dispatch/seats.json');
+  ok(!fs.existsSync(path.join(fakeHome, '.dsh', 'research-dispatch-diag.log')),
+    '默认未设 RESEARCH_DISPATCH_DIAG 时绝不静默向 ~/.dsh 写诊断日志（GP-08）');
+  if (prevDiag === undefined) delete process.env.RESEARCH_DISPATCH_DIAG; else process.env.RESEARCH_DISPATCH_DIAG = prevDiag;
+  if (prevDshHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevDshHome;
   ok(!events.includes('loader/volatile-update'), '不再注册 volatile 变更监听（没有要写回的东西）');
   ok(JSON.parse(fs.readFileSync(seatsFile, 'utf8')).seats[0].model_override === 'hand-written',
     '座位表里手写的 model_override 原样保留（面板从不碰它）');
@@ -631,6 +644,14 @@ ok(call && call[0] === 'research-dispatch' && call[1].reviewVotes === 'codex:gpt
     && host.plainValue('dispatch/seats.json') === 'dispatch/seats.json'
     && host.plainValue(undefined) === undefined,
     '④ volatile 包装与裸值都被 plainValue 正确解开');
+  // v2.0.0：同 Agent 多票（codex:gpt-5,codex:o3）在面板不吞票，发散执行者全解锁（claude / gemini 等不再标暂未接通）
+  mount({ remote: { settings: { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 9, user: {}, value: Object.assign({}, FULL_VALUE, { reviewVotes: 'codex:gpt-5,codex:o3', divergeCommand: 'claude', divergeModel: 'claude-sonnet-4-5' }), schema: REAL_SCHEMA }] } }), update: async () => ({ ok: true, value: {} }) } } });
+  const multiPage = await settle(render());
+  ok(multiPage.texts.filter((t) => /^票 \d+$/.test(t)).length === 2,
+    'v2.0.0 同 Agent 多票（codex:gpt-5,codex:o3）完整渲染两行，不被按席位名去重吞掉');
+  ok(multiPage.texts.join('').includes('claude · claude-sonnet-4-5') && !multiPage.texts.some((t) => t.includes('暂未接通')),
+    'v2.0.0 发散环节可选 claude / gemini 等全量执行者，不再锁死或标「暂未接通」');
+
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

@@ -491,6 +491,20 @@ try {
     assertRoleFileInfra(r, roleAbs);
     assert.ok(r.out.includes('不是普通文件'), '文案要说清"存在但不是普通文件"这层差异，实得：' + r.out.slice(0, 400));
   });
+  // ── 12) Windows 无显式 DSH_DISPATCH_BASH 时 run.mjs 自动避开 WSL 转发器（P0-1 / GP-02）
+  console.log('── 12) 未设 DSH_DISPATCH_BASH 时直跑 CLI 不撞 WSL 转发器（P0-1）');
+  t('删掉 DSH_DISPATCH_BASH / RESEARCH_DISPATCH_BASH 直跑 DRY 预演仍自动解析真 bash 退 0', () => {
+    const fx = mkFixture('no-bash-env', { seats: [cliSeat('codex', 'node')], defaultBackends: ['codex'] });
+    const env = childEnv(fx.root, { DRY: '1' });
+    delete env.DSH_DISPATCH_BASH;
+    delete env.RESEARCH_DISPATCH_BASH;
+    const r = spawnSync(process.execPath, [BIN, 'run', 'ideas/briefs/idea_01.md'], {
+      cwd: fx.root, encoding: 'utf8', env, timeout: 120000,
+    });
+    const out = (r.stdout || '') + (r.stderr || '');
+    assert.equal(r.status, 0, '未显式设 DSH_DISPATCH_BASH 时直跑应退 0（不许撞 System32 WSL 转发器报 rc=8/rc=2），实得 ' + r.status + '：\n' + out);
+    assert.ok(out.includes('[dry] 将写'), '应顺利完成 DRY 预演');
+  });
 } finally {
   for (const d of TMP_ROOTS) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* 忽略 */ } }
 }

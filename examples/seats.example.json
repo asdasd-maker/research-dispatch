@@ -1,10 +1,29 @@
 {
-  "version": 1,
+  "version": 2,
+  "policy": {
+    "require_unique_models": false
+  },
+  "lineup": {
+    "diverge": {
+      "seat": "codex",
+      "model": ""
+    },
+    "review": [
+      {
+        "seat": "codex",
+        "model": ""
+      },
+      {
+        "seat": "claude",
+        "model": ""
+      }
+    ]
+  },
   "paths": {
-    "briefs_dir": "ideas/briefs",
     "cards_dir": "ideas/cards",
     "workers_dir": "workers",
-    "role_file": "roles/reviewer.md"
+    "role_file": "roles/reviewer.md",
+    "require_anchor": false
   },
   "default_backends": [
     "codex",
@@ -77,19 +96,108 @@
         "explicit_env": "CLAUDE_MODEL",
         "file_env": "CLAUDE_CFG",
         "default_file": "~/.claude/settings.json",
+        "pattern": "\"(ANTHROPIC_MODEL|model)\"\\s*:\\s*\"[^\"]*\"",
+        "cut_field": 4
+      }
+    },
+    {
+      "id": "dsh",
+      "kind": "cli",
+      "enabled": false,
+      "command": "dsh",
+      "argv": [
+        "--profile",
+        "headless",
+        "{optional_args}",
+        "{payload}"
+      ],
+      "payload_position": "argv",
+      "output": "stdout",
+      "patch_env": "DSH_PATCH",
+      "optional_args": [
+        {
+          "env": "DSH_PATCH",
+          "argv": [
+            "--patch",
+            "{env}"
+          ]
+        }
+      ],
+      "identity": {
+        "kind": "settings",
+        "explicit_env": "DSH_MODEL"
+      }
+    },
+    {
+      "id": "gemini",
+      "kind": "cli",
+      "enabled": false,
+      "command": "gemini",
+      "argv": [
+        "-p",
+        "{payload}",
+        "{optional_args}"
+      ],
+      "payload_position": "argv",
+      "output": "stdout",
+      "optional_args": [
+        {
+          "env": "GEMINI_MODEL",
+          "argv": [
+            "-m",
+            "{env}"
+          ]
+        }
+      ],
+      "identity": {
+        "kind": "gemini",
+        "explicit_env": "GEMINI_MODEL",
+        "file_env": "GEMINI_CFG",
+        "default_file": "~/.gemini/settings.json",
         "pattern": "\"model\"\\s*:\\s*\"[^\"]*\"",
         "cut_field": 4
       }
     },
     {
-      "id": "manual",
+      "id": "api",
+      "kind": "api",
+      "enabled": false,
+      "base_env_var": "API_BASE_ENV",
+      "base_env_default": "OPENAI_BASE_URL",
+      "key_env_var": "API_KEY_ENV",
+      "key_env_default": "OPENAI_API_KEY",
+      "model": {
+        "env": "API_MODEL",
+        "default": "deepseek-chat"
+      },
+      "votes": {
+        "env": "API_VOTES",
+        "default": 1
+      },
+      "temperature": {
+        "env": "API_TEMPERATURE",
+        "default": "0.7"
+      },
+      "max_tokens": {
+        "env": "API_MAX_TOKENS",
+        "default": "4096"
+      },
+      "identity": {
+        "kind": "api",
+        "explicit_env": "API_MODEL"
+      }
+    },
+    {
+      "id": "manual1",
       "kind": "delivery",
-      "enabled": true,
+      "enabled": false,
+      "seat_pattern": "manual[0-9]+",
+      "body_env": "{SEAT_UPPER}_BODY",
+      "model_env": "{SEAT_UPPER}_MODEL",
+      "attest_sha_env": "{SEAT_UPPER}_SHA",
       "identity": {
         "kind": "manual"
-      },
-      "body_env": "MANUAL_BODY",
-      "sha_env": "MANUAL_SHA"
+      }
     }
   ]
 }

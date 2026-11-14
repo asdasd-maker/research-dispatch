@@ -1,15 +1,19 @@
 {
   "name": "research-dispatch",
-  "version": "1.0.4",
-  "description": "Multi-model review dispatch for DeepSeek Harness: seats decide who reviews, votes decide how many seats run, every round lands on disk as cards.",
+  "version": "2.0.0",
+  "description": "Universal pure-Node AI research workflow engine: literature pool, baseline repro, dead-end-aware divergence, out-of-repo isolated multi-agent review, paired pilot statistics, and frozen experiment contracts across Antigravity, Claude Code, Codex, Cursor, and DeepSeek Harness.",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
     ".": "./lib/index.js",
     "./run": "./lib/run.mjs",
     "./models": "./lib/models.mjs",
+    "./validators": "./lib/validators.mjs",
+    "./workflow": "./lib/workflow.mjs",
+    "./pilot-stats": "./lib/pilot-stats.mjs",
     "./bin": "./bin/dispatch.mjs",
-    "./client": "./lib/client.js"
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
   },
   "bin": {
     "research-dispatch": "./bin/dispatch.mjs"
@@ -21,22 +25,24 @@
     "examples/",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE",
-    "test/*.selftest.mjs"
+    "LICENSE"
   ],
   "scripts": {
-    "test": "node test/flow.selftest.mjs && node test/client.selftest.mjs && node test/run.selftest.mjs"
+    "test": "node test/flow.selftest.mjs && node test/client.selftest.mjs && node test/run.selftest.mjs && node test/standalone.selftest.mjs && node test/workflow.selftest.mjs"
   },
   "keywords": [
-    "deepseek-harness",
-    "dsh",
-    "dsh-plugin",
-    "multi-model",
-    "review",
-    "llm",
+    "research-workflow",
+    "ai-research",
+    "multi-agent",
+    "antigravity",
+    "claude-code",
     "codex",
-    "claude",
-    "qoder"
+    "cursor",
+    "gemini-cli",
+    "deepseek-harness",
+    "dsh-plugin",
+    "ablation-contract",
+    "paired-bootstrap"
   ],
   "engines": {
     "node": ">=20"

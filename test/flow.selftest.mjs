@@ -29,7 +29,7 @@ try {
     assert.equal(ft.FLOW_PARAMETERS.type, 'object');
     assert.ok(ft.FLOW_PARAMETERS.required.includes('action'));
   });
-  t('逐属性 required 方言被点名（实践教训）', () => {
+  t('逐属性 required 方言被点名', () => {
     const v = ft.parameterShapeViolations({ command: { type: 'string', required: true } });
     assert.ok(v.length >= 2, '应报 type 与 properties 两类违规，实得：' + v.join('；'));
   });
@@ -113,10 +113,11 @@ try {
   }
   fs.writeFileSync(path.join(st, 'ideas', 'cards', 'idea_07.manifest'),
     '<!-- manifest schema=2 2026-10-24T12:00:00+08:00 brief=b sha=dead status=OK -->\nvotes: codex claude dsh\n');
-  await ta('status 退 1（有待裁决）且报告点名轮次', async () => {
+  await ta('status 退 1（有待裁决）仍返回 ok:true + has_pending:true 且报告点名轮次', async () => {
     const r = await ft.dispatchFlow({ action: 'status' }, { repoRoot: st });
-    assert.equal(r.ok, false);           // rc=1 = 有待裁决，是既定语义不是故障
+    assert.equal(r.ok, true);            // rc=1 = 有待裁决，通道本身成功返回盘面而非工具报错
     assert.equal(r.rc, 1);
+    assert.equal(r.has_pending, true);
     assert.ok(r.report.includes('idea_07'), '报告应点名待裁决轮次');
     assert.ok(r.report.includes('待裁决 1'));
   });
@@ -179,6 +180,37 @@ try {
     assert.equal(res.ok, false);
     assert.equal(res.reason, 'bash-unavailable');
     assert.match(String(res.hint), /DSH_DISPATCH_BASH/);
+  });
+  t('PATH 首选 system32 转发器但后续含 Git\\cmd\\git.exe → 跳过转发器并经 git.exe 反推真 Git Bash（P0-1）', () => {
+    if (process.platform !== 'win32') {
+      assert.equal(true, true);
+      return;
+    }
+    const res = ft.resolveBash({
+      env: { PATH: 'C:\\Windows\\System32;D:\\Tools\\Git\\cmd' },
+      exists: (p) => (
+        /[\\/]system32[\\/]bash\.exe$/i.test(p)
+        || /^D:\\Tools\\Git\\cmd\\git\.exe$/i.test(p)
+        || /^D:\\Tools\\Git\\bin\\bash\.exe$/i.test(p)
+      ),
+    });
+    assert.equal(res.ok, true, '应跳过 WSL 转发器并从 git.exe 反推出真 Git Bash，实得：' + JSON.stringify(res));
+    assert.equal(res.via, 'git-root');
+    assert.match(String(res.bin), /Git[\\/]bin[\\/]bash\.exe$/i);
+    assert.ok(res.warnings.some((w) => w.includes('已跳过 PATH 中的 WSL 转发器')));
+  });
+  t('PATH 首选 system32 转发器但后段有真 Git\\bin\\bash.exe → 继续向后扫描命中真 bash（P0-1）', () => {
+    if (process.platform !== 'win32') {
+      assert.equal(true, true);
+      return;
+    }
+    const res = ft.resolveBash({
+      env: { PATH: 'C:\\Windows\\System32;E:\\Git\\bin' },
+      exists: (p) => /[\\/]system32[\\/]bash\.exe$/i.test(p) || /^E:\\Git\\bin\\bash\.exe$/i.test(p),
+    });
+    assert.equal(res.ok, true);
+    assert.equal(res.via, 'path');
+    assert.match(String(res.bin), /^E:\\Git\\bin\\bash\.exe$/i);
   });
   t('环境变量指向不存在的 bash → 留痕（不静默忽略），并继续自动探测', () => {
     const res = ft.resolveBash({ env: { DSH_DISPATCH_BASH: 'C:\\nope\\bash.exe', PATH: '' }, exists: () => false });
@@ -248,7 +280,7 @@ try {
 
   console.log('── 9) F1-4 state_set：只合并**显式给出**的字段');
   const st2 = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-state-'));
-  await ta('先写 step+open_question，再只传 entries → 断点仍在，answers 正常合并', async () => {
+  await ta('先写 step+open_question，再只传 entries → 断点仍在，answers 正常合并；传 null 清空断点且拒收数组 entries', async () => {
     const r1 = await ft.dispatchFlow({ action: 'state_set', step: 'ask-direction', open_question: 'direction',
       entries: { a: { answer: 'KL 峰值早停', origin: 'human' } } }, { repoRoot: st2 });
     assert.equal(r1.ok, true);
@@ -259,6 +291,23 @@ try {
     assert.equal(disk.open_question, 'direction', '断点 open_question 被抹掉了');
     assert.equal(disk.answers.a.answer, 'KL 峰值早停');
     assert.equal(disk.answers.b.origin, 'default');
+
+    const badArr = await ft.dispatchFlow({ action: 'state_set', entries: ['bad'] }, { repoRoot: st2 });
+    assert.equal(badArr.ok, false);
+    assert.equal(badArr.reason, 'invalid-entries');
+
+    const cleared = await ft.dispatchFlow({ action: 'state_set', open_question: null }, { repoRoot: st2 });
+    assert.equal(cleared.ok, true);
+    assert.equal(cleared.state.open_question, null);
+  });
+  t('state.json 损坏时自动留存 .corrupt.*.bak 备份且 readState 安全返回 null', () => {
+    const badDir = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-corrupt-'));
+    fs.mkdirSync(path.join(badDir, '.flow'), { recursive: true });
+    fs.writeFileSync(path.join(badDir, '.flow', 'state.json'), '{not-valid-json');
+    assert.equal(ft.readState(badDir), null);
+    const files = fs.readdirSync(path.join(badDir, '.flow'));
+    assert.ok(files.some((f) => f.startsWith('state.json.corrupt.') && f.endsWith('.bak')));
+    fs.rmSync(badDir, { recursive: true, force: true });
   });
 
   console.log('── 10) F1-5 超时：调用方不被告拖住，孙进程树被回收');
@@ -329,6 +378,69 @@ try {
     const infos = captured.slice(before).filter((c) => c.level === 'info').map((c) => c.text);
     assert.ok(infos.some((x) => x.includes('已加载')), '实得：' + JSON.stringify(infos));
     assert.equal(defs.length, 1);
+  });
+
+  await ta('P1-4 / P1-5：volatile repoRoot 热切换与补建 seats.json 后免重启自愈，且异步 inject 支持 dispose 重载', async () => {
+    const dynA = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-dyna-'));
+    const dynB = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-dynb-'));
+    let activeRoot = dynA;
+    const volatileCfg = {
+      repoRoot: { get: () => activeRoot },
+      seatsFile: { get: () => 'dispatch/seats.json' },
+    };
+    let registeredTool = null;
+    let disposedCount = 0;
+    let injectCb = null;
+    const ctxDyn = {
+      logger: fakeLogger,
+      get: () => null,
+      inject: (_deps, cb) => { injectCb = cb; },
+      on: () => {},
+    };
+    idx.apply(ctxDyn, volatileCfg);
+    assert.equal(typeof injectCb, 'function');
+
+    let subDispose = null;
+    const fakeTools = {
+      register: (d) => {
+        registeredTool = d;
+        return () => { disposedCount++; registeredTool = null; };
+      },
+    };
+    injectCb({ tools: fakeTools, on: (ev, fn) => { if (ev === 'dispose') subDispose = fn; } });
+    assert.ok(registeredTool, '异步 inject 应注册工具');
+
+    // 初始 dynA 缺 seats.json → status 报 config-error
+    const s1 = await registeredTool.execute({ action: 'status' });
+    assert.equal(s1.ok, false);
+    assert.equal(s1.reason, 'config-error');
+
+    // 热切换 volatile repoRoot 到 dynB 并补建 seats.json → 无需重新 apply 即自愈！
+    fs.mkdirSync(path.join(dynB, 'dispatch'), { recursive: true });
+    fs.writeFileSync(path.join(dynB, 'dispatch', 'seats.json'), JSON.stringify({
+      version: 1,
+      seats: [{ id: 'codex', kind: 'cli', command: 'codex', enabled: true }],
+    }));
+    activeRoot = dynB;
+    const cls2 = await registeredTool.execute({ action: 'classify' });
+    assert.equal(cls2.ok, true);
+    assert.equal(path.resolve(cls2.root), path.resolve(dynB));
+    assert.equal(cls2.class, 'ours');
+    const s2 = await registeredTool.execute({ action: 'status' });
+    assert.equal(s2.ok, true, '补齐 seats.json 后应自动脱离 config-error：' + JSON.stringify(s2));
+
+    // 模拟 tools 服务卸载并热重载重注入
+    subDispose();
+    assert.equal(disposedCount, 1);
+    assert.equal(registeredTool, null);
+    injectCb({ tools: fakeTools, on: () => {} });
+    assert.ok(registeredTool, 'tools 服务重载后应重新注册');
+
+    // apply(ctx, undefined) 不抛异常
+    idx.apply({ logger: fakeLogger, get: () => null, on: () => {} }, undefined);
+
+    fs.rmSync(dynA, { recursive: true, force: true });
+    fs.rmSync(dynB, { recursive: true, force: true });
   });
 
 } finally {
