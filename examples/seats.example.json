@@ -139,31 +139,34 @@
       }
     },
     {
-      "id": "gemini",
+      "id": "agy",
       "kind": "cli",
       "enabled": true,
-      "command": "gemini",
+      "command": "agy",
       "argv": [
         "-p",
         "{payload}",
+        "--output-format",
+        "text",
+        "--disable-slash-commands",
         "{optional_args}"
       ],
       "payload_position": "argv",
       "output": "stdout",
       "optional_args": [
         {
-          "env": "GEMINI_MODEL",
+          "env": "AGY_MODEL",
           "argv": [
-            "-m",
+            "--model",
             "{env}"
           ]
         }
       ],
       "identity": {
-        "kind": "gemini",
-        "explicit_env": "GEMINI_MODEL",
-        "file_env": "GEMINI_CFG",
-        "default_file": "~/.gemini/settings.json",
+        "kind": "agy",
+        "explicit_env": "AGY_MODEL",
+        "file_env": "AGY_CFG",
+        "default_file": "~/.gemini/antigravity-cli/settings.json",
         "pattern": "\"model\"\\s*:\\s*\"[^\"]*\"",
         "cut_field": 4
       }

@@ -54,7 +54,7 @@ function cleanEnv(root, extra = {}) {
     'DSH_DISPATCH_CONFIG', 'DSH_DISPATCH_SETTINGS', 'DSH_DISPATCH_USE_PATCH',
     'RESEARCH_DISPATCH_DIAG', 'BACKENDS', 'REVIEW_LINEUP', 'DRY', 'CALIBRATION',
     'API_VOTES', 'ALLOW_DOOMED_PLAN', 'REQUIRE_UNIQUE_MODELS', 'CODEX_MODEL',
-    'CLAUDE_MODEL', 'GEMINI_MODEL', 'DSH_MODEL', 'API_MODEL', 'OPENAI_BASE_URL',
+    'CLAUDE_MODEL', 'AGY_MODEL', 'AGY_CFG', 'AGY_MODELS_CACHE', 'GEMINI_MODEL', 'DSH_MODEL', 'API_MODEL', 'OPENAI_BASE_URL',
     'OPENAI_API_KEY', 'DIVERGE_CMD', 'DIVERGE_MODEL', 'BASELINE', 'DEAD_ENDS', 'NO_DEAD_ENDS', 'TOPIC',
   ]) {
     delete env[k];
@@ -67,6 +67,7 @@ function cleanEnv(root, extra = {}) {
     HOME: fakeHome,
     USERPROFILE: fakeHome,
     DSH_HOME: path.join(fakeHome, '.dsh'),
+    AGY_SKIP_LIVE_MODELS: '1',
     ...copyExtra,
   });
   for (const k of Object.keys(env)) {
@@ -478,7 +479,7 @@ try {
     const rAgents = runCli(e2eWs, ['agents', '--json']);
     assert.equal(rAgents.rc, 0, rAgents.out);
     const agJson = JSON.parse(rAgents.stdout);
-    assert.ok(Array.isArray(agJson.agents) && agJson.agents.some((a) => a.id === 'codex') && agJson.agents.some((a) => a.id === 'gemini'));
+    assert.ok(Array.isArray(agJson.agents) && agJson.agents.some((a) => a.id === 'codex') && agJson.agents.some((a) => a.id === 'agy'));
   });
 
   await ta('dispatchFlow agents 动作：向导工具直接返回 Agent 可用性列表', async () => {
@@ -1418,7 +1419,7 @@ try {
     // 2) 四阶段 lineup 一次性写入 scout / diverge(count=8, no-dead-ends) / review / novelty
     const rLineup = runCli(v21Ws, [
       'lineup',
-      '--scout', 'gemini:gemini-2.5-pro',
+      '--scout', 'agy:gemini-4-carbon-high',
       '--diverge', 'codex:gpt-5',
       '--diverge-count', '8',
       '--no-dead-ends',
@@ -1428,7 +1429,7 @@ try {
     ]);
     assert.equal(rLineup.rc, 0, rLineup.out);
     const luJson = JSON.parse(rLineup.stdout);
-    assert.deepEqual(luJson.lineup.scout, { seat: 'gemini', model: 'gemini-2.5-pro' });
+    assert.deepEqual(luJson.lineup.scout, { seat: 'agy', model: 'gemini-4-carbon-high' });
     assert.deepEqual(luJson.lineup.diverge, { seat: 'codex', model: 'gpt-5', count: 8, use_dead_ends: false });
     assert.deepEqual(luJson.lineup.novelty, { seat: 'claude', model: 'claude-sonnet-4-5' });
 
@@ -1437,8 +1438,8 @@ try {
     assert.equal(rStages.rc, 0, rStages.out);
     const stagesArr = JSON.parse(rStages.stdout);
     assert.deepEqual(stagesArr.map((s) => s.stage), ['scout', 'diverge', 'review', 'novelty']);
-    assert.equal(runCli(v21Ws, ['stage-exec', 'scout']).stdout.trim(), 'gemini');
-    assert.equal(runCli(v21Ws, ['stage-model', 'scout']).stdout.trim(), 'gemini-2.5-pro');
+    assert.equal(runCli(v21Ws, ['stage-exec', 'scout']).stdout.trim(), 'agy');
+    assert.equal(runCli(v21Ws, ['stage-model', 'scout']).stdout.trim(), 'gemini-4-carbon-high');
     assert.equal(runCli(v21Ws, ['stage-exec', 'diverge']).stdout.trim(), 'codex');
     assert.equal(runCli(v21Ws, ['stage-model', 'diverge']).stdout.trim(), 'gpt-5');
     assert.equal(runCli(v21Ws, ['stage-exec', 'review']).stdout.trim(), 'codex,claude');
@@ -1495,7 +1496,7 @@ try {
     ].join('\n'), 'utf8');
 
     const cfg = JSON.parse(fs.readFileSync(path.join(v21Ws, 'dispatch', 'seats.json'), 'utf8'));
-    for (const id of ['gemini', 'codex', 'claude']) {
+    for (const id of ['agy', 'codex', 'claude']) {
       const s = cfg.seats.find((x) => x.id === id);
       s.command = process.execPath;
       s.argv = [mockWorker, '-p', '{payload}'];

@@ -951,6 +951,7 @@ try {
     const envKeys = [
       'HOME', 'USERPROFILE', 'DSH_HOME', 'DSH_SETTINGS', 'DSH_PROFILE',
       'CODEX_CFG', 'CODEX_MODEL', 'CLAUDE_CFG', 'CLAUDE_MODEL',
+      'AGY_CFG', 'AGY_MODEL', 'AGY_MODELS_CACHE', 'AGY_SKIP_LIVE_MODELS',
       'GEMINI_CFG', 'GEMINI_MODEL', 'GEMINI_CLI_PKG_DIR',
       'KIMI_CFG', 'KIMI_MODEL', 'DSH_MODEL', 'API_MODEL',
     ];
@@ -961,11 +962,12 @@ try {
       const codexDir = path.join(fakeHome, '.codex');
       const claudeDir = path.join(fakeHome, '.claude');
       const geminiDir = path.join(fakeHome, '.gemini');
+      const agyDir = path.join(geminiDir, 'antigravity-cli');
       const kimiDir = path.join(fakeHome, '.kimi');
       const dshDir = path.join(fakeHome, '.dsh');
       const mockGemPkg = path.join(pDir, 'mock-gemini-cli');
       for (const d of [
-        codexDir, claudeDir, geminiDir, kimiDir,
+        codexDir, claudeDir, geminiDir, path.join(agyDir, 'cache'), kimiDir,
         path.join(dshDir, 'storages'),
         path.join(dshDir, 'profiles', 'desktop'),
         path.join(mockGemPkg, 'bundle'),
@@ -1019,7 +1021,22 @@ try {
         'model = "kimi-k2-thinking"',
       ].join('\n'));
 
-      // 4) gemini: settings.json + @google/gemini-cli 包内常量扫描（过滤 none/embedding/computer-use）+ 6 项兜底
+      // 4) agy (Antigravity CLI): ~/.gemini/antigravity-cli/settings.json + cache/models_cache.json + TSV 解析
+      fs.writeFileSync(path.join(agyDir, 'settings.json'), JSON.stringify({
+        model: 'gemini-4-carbon-high',
+      }));
+      fs.writeFileSync(path.join(agyDir, 'cache', 'models_cache.json'), JSON.stringify({
+        updatedAt: '2026-11-14T15:00:00.000Z',
+        defaultModel: 'gemini-4-carbon-medium',
+        models: [
+          'gemini-4-carbon-medium',
+          'gemini-4-carbon-high',
+          'claude-opus-5-5-high',
+          'gpt-oss-120b-medium',
+        ],
+      }));
+
+      // 4b) gemini (旧版兼容): settings.json + @google/gemini-cli 包内常量扫描（过滤 none/embedding/computer-use）+ 6 项兜底
       fs.writeFileSync(path.join(geminiDir, 'settings.json'), JSON.stringify({
         model: { name: 'gemini-custom-local' },
       }));
@@ -1101,7 +1118,31 @@ try {
         'moonshot/kimi-k2-thinking',
       ]);
 
-      // gemini 校验
+      // agy 校验（有实测缓存时严格按 settings.json + models_cache.json 精准输出；无缓存时兜底补入 AGY_FALLBACK_MODELS）
+      assert.equal(probed.agy.defaultModel, 'gemini-4-carbon-high');
+      assert.deepEqual(probed.agy.models, [
+        'gemini-4-carbon-high',
+        'gemini-4-carbon-medium',
+        'claude-opus-5-5-high',
+        'gpt-oss-120b-medium',
+      ]);
+      const parsedTsv = models.parseAgyModelsOutput([
+        'Fetching available models...',
+        'gemini-4-carbon-medium\tGemini 4 Carbon (Medium)',
+        'claude-opus-5-5-high\tClaude Opus 5.5 (Thinking)',
+      ].join('\n'));
+      assert.deepEqual(parsedTsv, {
+        defaultModel: 'gemini-4-carbon-medium',
+        models: ['gemini-4-carbon-medium', 'claude-opus-5-5-high'],
+      });
+      fs.writeFileSync(path.join(agyDir, 'settings.json'), JSON.stringify({ vimMode: false }));
+      assert.equal(models.agyConfigModel(), 'gemini-4-carbon-medium-from-config', 'settings.json 未配 model 时应回退 models_cache.json 的首行默认模型来源标记');
+      assert.equal(models.probeAgentModelsFromConfigs().agy.defaultModel, 'gemini-4-carbon-medium');
+      fs.unlinkSync(path.join(agyDir, 'cache', 'models_cache.json'));
+      const probedNoCache = models.probeAgentModelsFromConfigs();
+      assert.ok(probedNoCache.agy.models.includes('gemini-4-argon-high'), '无 models_cache.json 时应回退合并 AGY_FALLBACK_MODELS');
+
+      // gemini 旧版兼容校验
       assert.equal(probed.gemini.defaultModel, 'gemini-custom-local');
       for (const m of [
         'gemini-custom-local',
@@ -1164,7 +1205,13 @@ try {
     }
   });
 
-  t('v2.1.0 BUILT_IN_CLI_SEATS.kimi 与 examples/seats.example.json：text 输出格式与四阶段 lineup 示例', () => {
+  t('v2.1.2 BUILT_IN_CLI_SEATS.{agy,kimi} 与 examples/seats.example.json：text 输出格式与四阶段 lineup 示例', () => {
+    const agyBuiltIn = registry.BUILT_IN_CLI_SEATS.agy;
+    assert.ok(agyBuiltIn && agyBuiltIn.command === 'agy' && Array.isArray(agyBuiltIn.argv));
+    const agyFmtIdx = agyBuiltIn.argv.indexOf('--output-format');
+    assert.ok(agyFmtIdx >= 0 && agyBuiltIn.argv[agyFmtIdx + 1] === 'text', '内置 agy 座位必须使用 --output-format text');
+    assert.ok(agyBuiltIn.argv.includes('--disable-slash-commands'), '内置 agy 座位应禁用斜杠命令防误触');
+
     const kimiBuiltIn = registry.BUILT_IN_CLI_SEATS.kimi;
     assert.ok(kimiBuiltIn && Array.isArray(kimiBuiltIn.argv));
     const fmtIdx = kimiBuiltIn.argv.indexOf('--output-format');
@@ -1180,7 +1227,7 @@ try {
     const exCfg = registry.loadConfig(exDir, undefined, { useDshPatch: false });
     const exKimi = registry.findSeat(exCfg, 'kimi');
     assert.ok(exKimi && exKimi.argv.includes('text') && !exKimi.argv.includes('stream-json'));
-    for (const cliId of ['codex', 'claude', 'dsh', 'gemini', 'kimi']) {
+    for (const cliId of ['codex', 'claude', 'dsh', 'agy', 'kimi']) {
       const s = registry.findSeat(exCfg, cliId);
       assert.ok(s && s.enabled === true, 'examples/seats.example.json 中真实 CLI 座 ' + cliId + ' 默认应为 enabled: true');
     }
@@ -1356,10 +1403,10 @@ try {
     assert.equal(noopRes.synced, false);
     assert.equal(fs.readFileSync(seatsAbs, 'utf8'), beforeRaw, '面板全空默认态不应触碰原 seats.json');
 
-    // 4) 面板非空四阶段写穿同步：自动补入 gemini/kimi 座位，更新 lineup + default_backends，严禁改动 model_override
+    // 4) 面板非空四阶段写穿同步：自动补入 agy/kimi 座位，更新 lineup + default_backends，严禁改动 model_override
     const writeRes = registry.syncPanelLineupToSeats(syncRoot, 'dispatch/seats.json', {
-      scoutCommand: { get: () => 'gemini' },
-      scoutModel: { get: () => 'gemini-2.5-pro' },
+      scoutCommand: { get: () => 'agy' },
+      scoutModel: { get: () => 'gemini-4-carbon-high' },
       divergeCommand: 'kimi',
       divergeModel: 'sensenova/glm-5.2',
       divergeCount: '18',
@@ -1375,9 +1422,9 @@ try {
     assert.equal(syncedJson.seats[0].model_override, 'preserve-custom-override', '严禁触碰手写 model_override');
     assert.equal(syncedJson.seats.find((s) => s.id === 'claude').enabled, true, 'syncPanelLineupToSeats 选中的既有停用座位应自动置为 enabled: true');
     assert.equal(syncedJson.seats.find((s) => s.id === 'dsh').enabled, false, '未被面板选中的停用座位保持原状');
-    assert.ok(syncedJson.seats.some((s) => s.id === 'gemini') && syncedJson.seats.some((s) => s.id === 'kimi' && s.argv.includes('text')));
+    assert.ok(syncedJson.seats.some((s) => s.id === 'agy' && s.argv.includes('text')) && syncedJson.seats.some((s) => s.id === 'kimi' && s.argv.includes('text')));
     assert.deepEqual(syncedJson.lineup, {
-      scout: { seat: 'gemini', model: 'gemini-2.5-pro' },
+      scout: { seat: 'agy', model: 'gemini-4-carbon-high' },
       diverge: { seat: 'kimi', model: 'sensenova/glm-5.2', count: 18, use_dead_ends: false },
       review: [
         { seat: 'codex', model: 'gpt-5.4' },
@@ -1389,8 +1436,8 @@ try {
 
     // 相同快照二次同步应返回 synced: false（零无谓写盘）
     const idempRes = registry.syncPanelLineupToSeats(syncRoot, 'dispatch/seats.json', {
-      scoutCommand: 'gemini',
-      scoutModel: 'gemini-2.5-pro',
+      scoutCommand: 'agy',
+      scoutModel: 'gemini-4-carbon-high',
       divergeCommand: 'kimi',
       divergeModel: 'sensenova/glm-5.2',
       divergeCount: '18',
@@ -1405,7 +1452,7 @@ try {
     // 5) updateLineup 与 discoverAgents 完整覆盖四阶段读写、停用座自动激活与 reset
     registry.updateLineup(syncRoot, {
       scout: 'dsh:magpie/auto/qwen3-coder',
-      diverge: 'gemini:gemini-2.5-flash',
+      diverge: 'agy:gemini-4-argon-high',
       divergeCount: 12,
       useDeadEnds: true,
       review: 'codex:gpt-5.4,kimi:sensenova/glm-5.2',
@@ -1417,7 +1464,7 @@ try {
     const disc = registry.discoverAgents(syncRoot, { useDshPatch: false });
     assert.equal(disc.ok, true);
     assert.deepEqual(disc.lineup.scout, { seat: 'dsh', model: 'magpie/auto/qwen3-coder' });
-    assert.deepEqual(disc.lineup.diverge, { seat: 'gemini', model: 'gemini-2.5-flash', count: 12, use_dead_ends: true });
+    assert.deepEqual(disc.lineup.diverge, { seat: 'agy', model: 'gemini-4-argon-high', count: 12, use_dead_ends: true });
     assert.equal(disc.lineup.review.length, 2);
     assert.deepEqual(disc.lineup.novelty, { seat: 'kimi', model: 'sensenova/glm-5.2' });
     assert.equal(disc.lineup.require_unique_models, true);

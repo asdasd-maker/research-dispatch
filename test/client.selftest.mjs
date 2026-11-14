@@ -1,10 +1,10 @@
-// 设置页与宿主层离线自检（v2.1.0）：无浏览器、无真 React、无网络。
+// 设置页与宿主层离线自检（v2.1.2）：无浏览器、无真 React、无网络。
 //   node plugin/research-dispatch/test/client.selftest.mjs
 //
 // 覆盖契约：
 //   · schema 用真实形状 —— schemastery 的 toJSON() 是 { uid, refs }，覆盖全部 15 个字段；
 //   · 五大分区按科研闭环顺序排布：工作流项目 → 文献调研 → 想法发散 → 多票评审 → 前置查重；
-//   · 五合一真实 CLI 列表（codex / claude / dsh / gemini / kimi，移除 api 与幻影 subagent，兼容旧配置切走）；
+//   · 五合一真实 CLI 列表（codex / claude / dsh / agy / kimi，移除 api 与幻影 subagent，兼容旧 gemini/api 配置切走）；
 //   · ModelPicker 彻底根治空模型死锁：常驻顶部搜索/自定义输入框、首项常驻恢复默认、0 模型可手输自定义回车选用；
 //   · 宿主 apply() + loader/volatile-update 自动写穿同步 lineup 至 dispatch/seats.json，且绝不触碰手写 model_override。
 import { pathToFileURL } from 'node:url';
@@ -12,10 +12,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// 清理可能干扰路径解析的环境变量
+// 清理可能干扰路径解析的环境变量，并锁定离线无联网单测模式
 delete process.env.DSH_DISPATCH_ROOT;
 delete process.env.DSH_DISPATCH_CONFIG;
 delete process.env.DSH_DISPATCH_SETTINGS;
+process.env.AGY_SKIP_LIVE_MODELS = '1';
 
 // ── 极简 React：useState 有真状态，useEffect 手动 flush，3 秒超时短路 ────
 const hookState = [];
@@ -100,14 +101,14 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
   ok(direct && direct.ns === 'research-dispatch', '已声明时 ctx.remote.settings 直接可用');
 }
 
-// ── 模型清单与五合一执行者座位（移除 api，换入 kimi）──────────────────
+// ── 模型清单与五合一执行者座位（移除 api，换入 agy 与 kimi）──────────────
 {
-  const cat = mod.__test.catalogOf({ executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5;dsh:;gemini:gemini-2.5-pro;kimi:kimi-k2-thinking' });
-  ok(cat.length === 5 && cat[0].exec === 'codex' && cat[4].exec === 'kimi',
-    'catalogOf 解析五类 CLI 探测串');
+  const cat = mod.__test.catalogOf({ executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5;dsh:;agy:gemini-4-carbon-high;kimi:kimi-k2-thinking' });
+  ok(cat.length === 5 && cat[0].exec === 'codex' && cat[3].exec === 'agy' && cat[4].exec === 'kimi',
+    'catalogOf 解析五类 CLI 探测串（含 agy）');
 
-  const stMap = mod.__test.statusOf({ executorStatus: 'codex:1;claude:1;dsh:1;gemini:0;kimi:1' });
-  ok(stMap.codex === true && stMap.gemini === false && stMap.kimi === true,
+  const stMap = mod.__test.statusOf({ executorStatus: 'codex:1;claude:1;dsh:1;agy:0;kimi:1' });
+  ok(stMap.codex === true && stMap.agy === false && stMap.kimi === true,
     'statusOf 解析 executorStatus 安装标记（1→true, 0→false）');
 
   mod.__test.resetModelDirs();
@@ -154,14 +155,14 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
   const dsh = patched.find((c) => c.exec === 'dsh');
   const sub = patched.find((c) => c.exec === 'subagent');
   const apiEntry = patched.find((c) => c.exec === 'api');
-  const expectedSeats = ['codex', 'claude', 'dsh', 'gemini', 'kimi'];
+  const expectedSeats = ['codex', 'claude', 'dsh', 'agy', 'kimi'];
   ok(dsh && dsh.models.length === 5 && !dsh.models.includes('cline-pass/old-a'),
     'dsh 行以宿主目录为准');
   ok(!sub && !apiEntry
     && JSON.stringify(mod.__test.STAGE_SEATS) === JSON.stringify(expectedSeats)
     && JSON.stringify(mod.__test.REVIEW_SEATS) === JSON.stringify(expectedSeats)
     && JSON.stringify(mod.__test.DIVERGE_SEATS) === JSON.stringify(expectedSeats),
-    '五合一清晰 Agent 列表：STAGE_SEATS / REVIEW_SEATS / DIVERGE_SEATS 均为 [codex,claude,dsh,gemini,kimi]，剔除 api 与 subagent');
+    '五合一清晰 Agent 列表：STAGE_SEATS / REVIEW_SEATS / DIVERGE_SEATS 均为 [codex,claude,dsh,agy,kimi]，剔除 api 与 subagent');
   ok(patched.find((c) => c.exec === 'codex').models.includes('gpt-5')
     && patched.find((c) => c.exec === 'kimi').models.includes('kimi-k2'),
     'codex / kimi 外部 CLI 座位不受 dsh 覆盖影响');
@@ -439,8 +440,8 @@ const FULL_VALUE = {
   reviewVotes: '',
   noveltyCommand: '',
   noveltyModel: '',
-  executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5;dsh:qoder/deepseek-v4-pro;gemini:gemini-2.5-pro;kimi:kimi-k2-thinking',
-  executorStatus: 'codex:1;claude:1;dsh:1;gemini:0;kimi:1',
+  executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5;dsh:qoder/deepseek-v4-pro;agy:gemini-4-carbon-medium|gemini-4-carbon-high;kimi:kimi-k2-thinking',
+  executorStatus: 'codex:1;claude:1;dsh:1;agy:0;kimi:1',
   otherStages: '',
   stageOpinions: '',
 };
@@ -472,16 +473,17 @@ const readyApi = {
   ok(page.texts.filter((t) => t === '高级项').length === 0, '无未知字段时不渲染「高级项」');
   ok(!/undefined/.test(page.texts.join(' ')), '无 undefined 泄漏');
 
-  // 所有下拉框均不含 subagent 或 api（默认无旧残留时），且带友好工具标签与未安装提示
+  // 所有下拉框均不含 subagent、api 或旧版 gemini（默认无旧残留时），且带友好工具标签与未安装提示
   const anySubagent = page.selects.some((p) => optsOf(p).some((o) => o.value === 'subagent'));
   const anyApi = page.selects.some((p) => optsOf(p).some((o) => o.value === 'api'));
-  ok(!anySubagent && !anyApi, '所有下拉框均移除 api 与 subagent');
+  const anyLegacyGemini = page.selects.some((p) => optsOf(p).some((o) => o.value === 'gemini'));
+  ok(!anySubagent && !anyApi && !anyLegacyGemini, '所有下拉框默认均不含 api、subagent 与旧版 gemini');
   const scoutSelect = page.selects[0];
   const scoutLabels = optsOf(scoutSelect).map((o) => String([].concat(o.children || []).join('')));
   ok(scoutLabels.some((l) => l.includes('codex · Codex CLI'))
     && scoutLabels.some((l) => l.includes('kimi · Kimi Code'))
-    && scoutLabels.some((l) => l.includes('gemini · Gemini CLI（未检测到命令）')),
-    '下拉框展示友好名称，并对 executorStatus=0 的工具柔和标注「（未检测到命令）」');
+    && scoutLabels.some((l) => l.includes('agy · Antigravity（未检测到命令）')),
+    '下拉框展示 agy · Antigravity 等友好名称，并对 executorStatus=0 的工具柔和标注「（未检测到命令）」');
 
   // 工作流项目输入框 + 发散单轮默认条数 + 死胡同过滤开关交互并保存
   const pathInput = page.inputs.find((p) => String(p.className || '').includes('rdp-in-path'));
@@ -497,9 +499,9 @@ const readyApi = {
   numInput.onChange({ target: { value: '45' } });
   deadEndsSelect.onChange({ target: { value: 'false' } });
   let editedPage = render();
-  // 同时设置前置查重为 gemini
+  // 同时设置前置查重为 agy
   const noveltySelect = editedPage.selects[editedPage.selects.length - 1];
-  noveltySelect.onChange({ target: { value: 'gemini' } });
+  noveltySelect.onChange({ target: { value: 'agy' } });
   editedPage = render();
 
   // 加一票 codex
@@ -516,9 +518,9 @@ const readyApi = {
     && savedPatches[0].scoutCommand === 'kimi'
     && savedPatches[0].divergeCount === '45'
     && savedPatches[0].divergeUseDeadEnds === 'false'
-    && savedPatches[0].noveltyCommand === 'gemini'
+    && savedPatches[0].noveltyCommand === 'agy'
     && savedPatches[0].reviewVotes === 'codex:',
-    '点击保存完整提交五分区改动（支持 31–50 范围内条数如 45）');
+    '点击保存完整提交五分区改动（支持 agy 座位与 31–50 范围内条数如 45）');
 
   // 超上限 >50 自动钳制到 50，且在默认空串下显式保存 10/true 仍可写穿提交
   const pClamp = render();
@@ -537,15 +539,22 @@ const readyApi = {
     '单轮条数超上限 99 钳制为 50，且在 value 为空串时显式选 true 仍可正常提交保存');
 }
 
-// ── 历史残留 api 兼容：仅在当前值为 api 时显示兼容项以便用户切走 ──────────
+// ── 历史残留 api / gemini 兼容：仅在当前值为旧项时显示兼容项以便用户切走 ──
 {
-  const legacyApiVal = Object.assign({}, FULL_VALUE, { divergeCommand: 'api', reviewVotes: 'api:deepseek-chat,kimi:kimi-k2' });
+  const legacyApiVal = Object.assign({}, FULL_VALUE, {
+    scoutCommand: 'gemini',
+    divergeCommand: 'api',
+    reviewVotes: 'api:deepseek-chat,kimi:kimi-k2',
+  });
   mount({ remote: { settings: { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 8, user: {}, value: legacyApiVal, schema: REAL_SCHEMA }] } }), update: async () => ({ ok: true, value: {} }) } } });
   const pApi = await settle(render());
-  const scoutOpts = optsOf(pApi.selects[0]).map((o) => o.value);
+  const scoutOpts = optsOf(pApi.selects[0]).map((o) => ({ value: o.value, label: String([].concat(o.children || []).join('')) }));
   const divergeOpts = optsOf(pApi.selects[1]).map((o) => o.value);
-  ok(!scoutOpts.includes('api') && divergeOpts.includes('api'),
+  ok(!scoutOpts.some((o) => o.value === 'api') && divergeOpts.includes('api'),
     '历史配置残留 api 时，仅在当前值为 api 的下拉框显示兼容项供切走，其余下拉框绝不出现 api');
+  ok(scoutOpts.some((o) => o.value === 'gemini' && o.label.includes('建议切换至 agy'))
+    && !divergeOpts.includes('gemini'),
+    '历史配置残留 gemini 时，仅在当前值为 gemini 的下拉框提示「建议切换至 agy」，其余下拉框只展示 agy');
 }
 
 // ── NS_MISSING 与断连态：断连时五分区骨架保留且控件全部禁用 ─────────────
@@ -596,9 +605,9 @@ const readyApi = {
 
   const catKeys = host.executorCatalog().split(';').map((s) => s.split(':')[0]);
   const statPairs = host.executorStatus().split(';');
-  ok(JSON.stringify(catKeys) === JSON.stringify(['codex', 'claude', 'dsh', 'gemini', 'kimi']),
-    'host.executorCatalog() 精确覆盖 [codex,claude,dsh,gemini,kimi] 五座，不含 api / subagent');
-  ok(statPairs.length === 5 && statPairs.every((p) => /^(codex|claude|dsh|gemini|kimi):(0|1)$/.test(p)),
+  ok(JSON.stringify(catKeys) === JSON.stringify(['codex', 'claude', 'dsh', 'agy', 'kimi']),
+    'host.executorCatalog() 精确覆盖 [codex,claude,dsh,agy,kimi] 五座，不含 api / subagent / 旧 gemini');
+  ok(statPairs.length === 5 && statPairs.every((p) => /^(codex|claude|dsh|agy|kimi):(0|1)$/.test(p)),
     'host.executorStatus() 输出五座 0/1 安装标记');
 
   const repo = path.join(tmp, 'repo');
@@ -618,8 +627,8 @@ const readyApi = {
   const liveState = {
     repoRoot: repo,
     seatsFile: 'dispatch/seats.json',
-    scoutCommand: 'gemini',
-    scoutModel: 'gemini-2.5-pro',
+    scoutCommand: 'agy',
+    scoutModel: 'gemini-4-carbon-high',
     divergeCommand: 'kimi',
     divergeModel: 'kimi-k2-thinking',
     divergeCount: '12',
@@ -656,12 +665,12 @@ const readyApi = {
     ok(afterMount.seats[0].model_override === 'hand-written',
       '写穿同步严守边界：绝不改动 seats[0].model_override 等手写座位属性');
     ok(afterMount.lineup
-      && afterMount.lineup.scout && afterMount.lineup.scout.seat === 'gemini' && afterMount.lineup.scout.model === 'gemini-2.5-pro'
+      && afterMount.lineup.scout && afterMount.lineup.scout.seat === 'agy' && afterMount.lineup.scout.model === 'gemini-4-carbon-high'
       && afterMount.lineup.diverge && afterMount.lineup.diverge.seat === 'kimi'
       && afterMount.lineup.diverge.count === 12 && afterMount.lineup.diverge.use_dead_ends === false
       && Array.isArray(afterMount.lineup.review) && afterMount.lineup.review.length === 2
       && afterMount.lineup.novelty && afterMount.lineup.novelty.seat === 'claude',
-      'apply() 初次挂载将四阶段阵容（含 diverge.count=12, use_dead_ends=false）写穿至 seats.json lineup');
+      'apply() 初次挂载将四阶段阵容（含 scout=agy, diverge.count=12, use_dead_ends=false）写穿至 seats.json lineup');
 
     // 模拟用户在 DSH 面板修改配置并点击「保存」触发 loader/volatile-update
     liveState.reviewVotes = 'codex:gpt-5,codex:o3,kimi:kimi-k2-thinking';
@@ -763,18 +772,18 @@ const readyApi = {
 
     // 1) 当 desc.value.executorCatalog 为空或残留旧串时，自动合并 desc.schema 的 meta.default 模型目录
     const schemaWithDefaults = JSON.parse(JSON.stringify(REAL_SCHEMA));
-    schemaWithDefaults.refs['45'].meta.default = 'codex:gpt-5.4;claude:claude-sonnet-4-5;dsh:;gemini:gemini-2.5-pro|gemini-2.5-flash;kimi:kimi-k2-thinking';
-    schemaWithDefaults.refs['49'].meta.default = 'codex:1;claude:1;dsh:1;gemini:1;kimi:0';
+    schemaWithDefaults.refs['45'].meta.default = 'codex:gpt-5.4;claude:claude-sonnet-4-5;dsh:;agy:gemini-4-carbon-medium|gemini-4-carbon-high;kimi:kimi-k2-thinking';
+    schemaWithDefaults.refs['49'].meta.default = 'codex:1;claude:1;dsh:1;agy:1;kimi:0';
     const schemaProps = mod.__test.propsFromSchema(schemaWithDefaults);
     const catRecovered = mod.__test.panelCatalog({ executorCatalog: 'codex:;claude:;dsh:;gemini:;api:' }, { get: () => undefined }, schemaProps);
-    const gemRow = catRecovered.find((c) => c.exec === 'gemini');
+    const agyRow = catRecovered.find((c) => c.exec === 'agy');
     const stRecovered = mod.__test.effectiveStatusOf({ executorStatus: '' }, schemaProps);
-    ok(!!gemRow && gemRow.models.includes('gemini-2.5-pro') && gemRow.models.includes('gemini-2.5-flash'),
-      'v2.1.1：desc.value.executorCatalog 为旧版空值时，自动从 desc.schema.default 恢复完整探测模型列表');
-    ok(stRecovered.gemini === true && stRecovered.kimi === false,
-      'v2.1.1：desc.value.executorStatus 为空时，自动从 desc.schema.default 恢复 CLI 安装标记');
+    ok(!!agyRow && agyRow.models.includes('gemini-4-carbon-medium') && agyRow.models.includes('gemini-4-carbon-high'),
+      'v2.1.2：desc.value.executorCatalog 为旧版空值时，自动从 desc.schema.default 恢复 agy 等完整探测模型列表');
+    ok(stRecovered.agy === true && stRecovered.kimi === false,
+      'v2.1.2：desc.value.executorStatus 为空时，自动从 desc.schema.default 恢复 CLI 安装标记');
 
-    // 2) Windows 托盘驻留分脑（前端热更到 v2.1.x，后台仍为 v2.0.0 schema）时渲染明确托盘退出提示横幅
+    // 2) Windows 托盘驻留分脑（后台仍为 v2.0.0 或 v2.1.1 无 agy schema）时渲染明确托盘退出提示横幅
     const v20Schema = {
       uid: 30,
       refs: {
@@ -788,9 +797,13 @@ const readyApi = {
         },
       },
     };
+    const v211Schema = JSON.parse(JSON.stringify(REAL_SCHEMA));
+    v211Schema.refs['45'].meta.default = 'codex:gpt-5.4;claude:claude-sonnet-4-5;dsh:;gemini:gemini-2.5-pro;kimi:kimi-k2-thinking';
     ok(mod.__test.isBackendOutdated({ ns: 'research-dispatch', schema: v20Schema, value: {} }) === true
+      && mod.__test.isBackendOutdated({ ns: 'research-dispatch', schema: v211Schema, value: {} }) === true
+      && mod.__test.isBackendOutdated({ ns: 'research-dispatch', schema: schemaWithDefaults, value: {} }) === false
       && mod.__test.isBackendOutdated({ ns: 'research-dispatch', schema: REAL_SCHEMA, value: {} }) === false,
-      'v2.1.1：isBackendOutdated 精准识别 v2.0.0 驻留后台 schema 与 v2.1+ 正常后台');
+      'v2.1.2：isBackendOutdated 精准识别 v2.0.0 / v2.1.1 驻留旧后台 schema 与 v2.1.2 含 agy 正常后台');
 
     mount({
       remote: {
@@ -867,24 +880,24 @@ const readyApi = {
       headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
       socket: { remoteAddress: '127.0.0.1' },
     }));
-    ok(!!liveSnap && liveSnap.version === '2.1.1' && liveSnap.catalog.includes('gemini:'),
-      'v2.1.1：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI 模型目录');
+    ok(!!liveSnap && liveSnap.version === '2.1.2' && liveSnap.catalog.includes('agy:'),
+      'v2.1.2：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
 
     const catFromBridge = mod.__test.panelCatalog({ executorCatalog: '' }, { get: () => undefined }, null);
-    ok(catFromBridge.some((c) => c.exec === 'gemini' && c.models.length >= 6),
-      'v2.1.1：即使 value 与 schema 均为空，实时桥快照仍可为面板注入完整探测模型（如 gemini ≥6 个模型）');
+    ok(catFromBridge.some((c) => c.exec === 'agy' && c.models.length >= 6),
+      'v2.1.2：即使 value 与 schema 均为空，实时桥快照仍可为面板注入完整探测模型（如 agy ≥6 个模型）');
 
     if (registeredRoute && typeof registeredRoute.__dispose === 'function') registeredRoute.__dispose();
-    ok(routeDisposed === true, 'v2.1.1：webServer 路由卸载时干净释放');
+    ok(routeDisposed === true, 'v2.1.2：webServer 路由卸载时干净释放');
 
     // 4) 离线 schemaShim().object(...).toJSON() 与 propsFromSchema 100% 兼容
     const shimZ = host.__schemaShimForTest();
     const shimSchema = shimZ.object({
-      executorCatalog: shimZ.string().default('gemini:gemini-2.5-pro').extra('volatile', true),
+      executorCatalog: shimZ.string().default('agy:gemini-4-carbon-high').extra('volatile', true),
     });
     const shimProps = mod.__test.propsFromSchema(shimSchema.toJSON());
-    ok(!!shimProps && shimProps.executorCatalog && shimProps.executorCatalog.default === 'gemini:gemini-2.5-pro',
-      'v2.1.1：离线 schemaShim.toJSON() 产出标准 { uid, refs } 并被 propsFromSchema 正常读取');
+    ok(!!shimProps && shimProps.executorCatalog && shimProps.executorCatalog.default === 'agy:gemini-4-carbon-high',
+      'v2.1.2：离线 schemaShim.toJSON() 产出标准 { uid, refs } 并被 propsFromSchema 正常读取');
 
     mod.__test.resetBridgeSnapshot();
   }

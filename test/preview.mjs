@@ -38,12 +38,12 @@ mod.__test.setLiveGroups([
   { id: 'magpie-anthropic', name: 'Magpie · Anthropic', models: [{ id: 'zcode/GLM-5.3-Flash', name: 'GLM 5.3-Flash · ZCode' }] },
 ]);
 
-// 展示 v2.1.0 五大分区（工作流项目 → 文献调研 → 想法发散 → 多票评审 → 前置查重）与五类 CLI 编排。
+// 展示 v2.1.2 五大分区（工作流项目 → 文献调研 → 想法发散 → 多票评审 → 前置查重）与五类 CLI 编排。
 const VALUE = {
   repoRoot: '/workspace/my-research',
   seatsFile: 'dispatch/seats.json',
-  scoutCommand: 'gemini',
-  scoutModel: 'gemini-2.5-pro',
+  scoutCommand: 'agy',
+  scoutModel: 'gemini-4-carbon-high',
   divergeCommand: 'kimi',
   divergeModel: 'kimi-k2-thinking',
   divergeCount: '10',
@@ -51,8 +51,8 @@ const VALUE = {
   reviewVotes: 'codex:gpt-5,codex:o3,claude:claude-sonnet-4-5,dsh:qoder/deepseek-v4-pro',
   noveltyCommand: 'claude',
   noveltyModel: 'claude-sonnet-4-5',
-  executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5|claude-opus-4-1;dsh:qoder/deepseek-v4-pro;gemini:gemini-2.5-pro|gemini-2.5-flash;kimi:kimi-k2-thinking',
-  executorStatus: 'codex:1;claude:1;dsh:1;gemini:1;kimi:1',
+  executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5|claude-opus-4-1;dsh:qoder/deepseek-v4-pro;agy:gemini-4-carbon-medium|gemini-4-carbon-high|claude-opus-5-5-high;kimi:kimi-k2-thinking',
+  executorStatus: 'codex:1;claude:1;dsh:1;agy:1;kimi:1',
   otherStages: '',
   stageOpinions: '',
 };

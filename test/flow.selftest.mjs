@@ -461,7 +461,7 @@ try {
         default_backends: ['codex', 'claude'],
         policy: { require_unique_models: false },
         lineup: {
-          scout: { seat: 'gemini', model: 'gemini-2.5-pro' },
+          scout: { seat: 'agy', model: 'gemini-4-carbon-high' },
           diverge: { seat: 'codex', model: 'gpt-5', count: 7, use_dead_ends: false },
           review: [
             { seat: 'codex', model: 'gpt-5' },
@@ -472,15 +472,15 @@ try {
         seats: [
           { id: 'codex', kind: 'cli', enabled: true, command: 'node', argv: ['-v'], identity: { kind: 'config', explicit_env: 'CODEX_MODEL' } },
           { id: 'claude', kind: 'cli', enabled: true, command: 'node', argv: ['-v'], identity: { kind: 'config', explicit_env: 'CLAUDE_MODEL' } },
-          { id: 'gemini', kind: 'cli', enabled: true, command: 'node', argv: ['-v'], identity: { kind: 'gemini', explicit_env: 'GEMINI_MODEL' } },
+          { id: 'agy', kind: 'cli', enabled: true, command: 'node', argv: ['-v'], identity: { kind: 'agy', explicit_env: 'AGY_MODEL' } },
         ],
       }, null, 2));
 
       const ag = await ft.dispatchFlow({ action: 'agents' }, { repoRoot: st4 });
       assert.equal(ag.ok, true);
       assert.ok(ag.lineup && ag.stages, 'agents 应返回 lineup 与 stages');
-      assert.equal(ag.stages.scout.seat, 'gemini');
-      assert.equal(ag.stages.scout.model, 'gemini-2.5-pro');
+      assert.equal(ag.stages.scout.seat, 'agy');
+      assert.equal(ag.stages.scout.model, 'gemini-4-carbon-high');
       assert.equal(ag.stages.diverge.seat, 'codex');
       assert.equal(ag.stages.diverge.count, 7);
       assert.equal(ag.stages.diverge.use_dead_ends, false);
@@ -491,7 +491,7 @@ try {
       const stRes = await ft.dispatchFlow({ action: 'status' }, { repoRoot: st4 });
       assert.equal(stRes.ok, true);
       assert.ok(stRes.stages, '有 seats.json 时 status 应附带四阶段 stages 快照');
-      assert.equal(stRes.stages.scout.seat, 'gemini');
+      assert.equal(stRes.stages.scout.seat, 'agy');
       assert.equal(stRes.stages.diverge.count, 7);
       assert.equal(stRes.stages.novelty.seat, 'claude');
 

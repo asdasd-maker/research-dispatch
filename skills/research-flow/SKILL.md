@@ -1,11 +1,11 @@
 ---
 name: research-flow
-description: Universal pure-Node AI research workflow wizard (research-dispatch v2.1.1) — guides 4-stage multi-agent orchestration (literature scout, dead-end-aware or blank-slate diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), baseline sign-off, <=2h paired pilot stats, human verdict, and frozen research contracts across Antigravity, Claude Code, Codex, Cursor, Kimi Code, Gemini CLI, and DSH.
+description: Universal pure-Node AI research workflow wizard (research-dispatch v2.1.2) — guides 4-stage multi-agent orchestration (literature scout, dead-end-aware or blank-slate diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), baseline sign-off, <=2h paired pilot stats, human verdict, and frozen research contracts across Antigravity (agy), Claude Code, Codex, Cursor, Kimi Code, and DSH.
 ---
 
-# Research-Flow 全链路科研向导规程（v2.1.1）
+# Research-Flow 全链路科研向导规程（v2.1.2）
 
-你是 `research-dispatch` v2.1.1 科研工作流的主控向导。本规程通用于 **Antigravity、Claude Code、Codex CLI、Cursor / Cline / Windsurf、Kimi Code、Gemini CLI 与 DSH** 等任意宿主：
+你是 `research-dispatch` v2.1.2 科研工作流的主控向导。本规程通用于 **Antigravity (`agy`)、Claude Code、Codex CLI、Cursor / Cline / Windsurf、Kimi Code 与 DSH** 等任意宿主：
 - 若当前宿主已挂载 `research_dispatch` 工具（MCP / 插件通道），优先用该工具执行免费诊断动作（`classify`、`agents`、`status`、`summary`、`preview`、`state_get`、`state_set`）；
 - 若在纯终端或 CLI 宿主中工作，直接通过跨平台纯 Node 命令 `npx research-dispatch <subcommand>` 执行完全等价的确定性流水线（零 Bash / Python 外部依赖）。
 
@@ -23,7 +23,7 @@ description: Universal pure-Node AI research workflow wizard (research-dispatch 
      - `ours`（已接入项目）：立即读取 `.flow/state.json`（`state_get`）与当前盘面状态（`status`）。
 2. **探测五大 CLI 执行者与四阶段阵容（`agents` & `lineup`）**：
    - 工具调用：`research_dispatch({ action: "agents" })` 或 `npx research-dispatch agents`。
-   - 引擎零子进程深度扫描本机已安装的五大 CLI 执行者（`codex`、`claude`、`dsh`、`gemini`、`kimi` Kimi Code）及其本地配置文件/模型缓存/包内模型目录，透明展示四阶段阵容（`scout` 文献调研、`diverge` 想法发散、`review` 多票盲审、`novelty` 前置查重）。
+   - 引擎深度扫描本机已安装的五大 CLI 执行者（`codex`、`claude`、`dsh`、`agy` Antigravity、`kimi` Kimi Code）及其本地配置文件与模型缓存目录，透明展示四阶段阵容（`scout` 文献调研、`diverge` 想法发散、`review` 多票盲审、`novelty` 前置查重）。
    - 需要调整阵容或发散默认策略时，运行：
      `npx research-dispatch lineup [--scout <seat[:model]>] [--diverge <seat[:model]>] [--diverge-count <N>] [--use-dead-ends | --no-dead-ends] [--review <seat[:model],...>] [--novelty <seat[:model]>]`
      更新项目唯一真源 `dispatch/seats.json`（在 DSH 桌面端「科研派工 · 全流程阵容」面板点击保存也会自动写穿同步至该文件）。

@@ -1,24 +1,24 @@
 # research-dispatch
 
-**Universal Pure-Node AI Research Workflow Engine (`v2.1.1`)**
+**Universal Pure-Node AI Research Workflow Engine (`v2.1.2`)**
 *Literature Scout (LaTeX/Markdown-First) → Baseline Repro Gate → Dual-Mode Divergence → Out-of-Repo Multi-Agent Blind Review & Ranked 5D Summary → Pre-Contract Novelty & Paired `2σ` Pilot Stats → Human Verdict → Frozen Experiment Contract.*
 
 普适纯 Node 科研流程引擎：把「文献调研成池（优先抓取 arXiv LaTeX/Markdown 免 PDF 乱序）→ 基线复现签字 → 双模式候选发散（默认 10 条，支持挂载死胡同记忆或纯空白零锚定模式）→ 仓外物理隔离的多 Agent 盲审与五维 `/25` 自动 Ranking 总表 → 单工单隔离前置查重与 ≤2h Pilot 配对统计探针 → 人类唯一裁决 → 实验与消融契约哈希冻结」做成一套**零外部脚本依赖、跨主流 AI 编程宿主开箱即用**的确定性流水线。
 
-> **English Overview**: `research-dispatch` v2.1.1 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, **Gemini CLI**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
+> **English Overview**: `research-dispatch` v2.1.2 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity (`agy`)**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
 
 ---
 
-## 核心特性（v2.1.1）
+## 核心特性（v2.1.2）
 
 - **四大 AI 阶段全流程独立编排（`scout` / `diverge` / `review` / `novelty`）**：
   - **S0 文献调研（`scout`）**：自动读取 `roles/scout.md`、注入已有文献去重清单、要求优先提取 arXiv LaTeX/HTML/Markdown 源码信息，自动切分多卡、逐张执行 `check-paper`（坏卡隔离至 `rejected/`），支持 `--pool` 一键刷新 `papers/cards/_pool.md`。
   - **S2 想法发散（`diverge`）**：支持在 `dispatch/seats.json` 或设置面板持久化默认单轮条数（`count`，默认 `10`）与死胡同过滤开关（`use_dead_ends: true|false`），既可常规挂载 `<=60` 行 `dead-ends.md` 防重复踩坑，也可切换 `--no-dead-ends` 纯空白零历史锚定模式。
   - **S4 多票隔离盲审（`review`）**：支持同一 CLI 排多票对比不同模型（如 `codex:gpt-5,codex:o3` → `codex1.md` + `codex2.md`）与跨工具自由组合；默认 `require_unique_models: false` 在 `.manifest` 如实记录 `shared_models` 留痕而不强行毁票；`summary` 按五维正向总均分（`/25`）自动降序 Ranking。
   - **S4.5 前置查重（`novelty`）**：按工单路径或工单 ID 单单推式隔离派工外部查新（仅可见 `roles/novelty.md` + 当前唯一 `brief` + `_pool.md`，零同批工单串味），落盘 `papers/novelty/<id>.md` 并自动运行 `check-novelty` 校验闸门。
-- **五大 CLI 执行者 + 零子进程深度模型自动发现**：
-  - 原生支持 **`codex`（Codex CLI）**、**`claude`（Claude Code）**、**`dsh`（DeepSeek Harness）**、**`gemini`（Gemini CLI）**、**`kimi`（Kimi Code，`--output-format text`）** 五大真实 CLI 工具（底层仍兼容编程式 `api` / `delivery` 座位）。
-  - 毫秒级本地静态扫描（零子进程开销、零密钥值读取）：自动聚合 `~/.codex/{config.toml,models_cache.json,cc-switch-model-catalog.json}`、`~/.claude/settings.json`（含 `ANTHROPIC_*MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` / `availableModels`）、`~/.dsh/{settings.yaml,storages/*catalog*.json}` 与 `cordis.patch.yml` 模型 ID、`~/.gemini/settings.json` 与已安装 `@google/gemini-cli` 包内模型常量、`~/.kimi/config.toml`（顶层与 `[models.*]` 节）。
+- **五大 CLI 执行者 + 本地模型自动发现与缓存同步**：
+  - 原生支持 **`codex`（Codex CLI）**、**`claude`（Claude Code）**、**`dsh`（DeepSeek Harness）**、**`agy`（Antigravity CLI，`--output-format text --disable-slash-commands`）**、**`kimi`（Kimi Code，`--output-format text`）** 五大真实 CLI 工具（底层仍兼容编程式 `api` / `delivery` 座位）。
+  - 毫秒级本地配置与模型目录扫描（零密钥值读取）：自动聚合 `~/.codex/{config.toml,models_cache.json,cc-switch-model-catalog.json}`、`~/.claude/settings.json`（含 `ANTHROPIC_*MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` / `availableModels`）、`~/.dsh/{settings.yaml,storages/*catalog*.json}` 与 `cordis.patch.yml` 模型 ID、`~/.gemini/antigravity-cli/{settings.json,cache/models_cache.json}`（支持 `agy models` 异步实时刷新缓存）、`~/.kimi/config.toml`（顶层与 `[models.*]` 节）。
 - **仓外临时目录物理隔离（`os.tmpdir()`）**：全部外部 CLI 子进程默认在系统临时目录（项目 `.git` 树之外）启动，向上遍历父目录永远读不到项目根 `AGENTS.md` 或 `CLAUDE.md`。
 - **DSH 全流程五分区面板 + 保存即写穿同步（Write-Through）**：
   - DSH 桌面端设置页按科研闭环排布「`工作流项目` → `文献调研` → `想法发散` → `多票评审` → `前置查重`」五大分区，剔除令人困惑的 `api` 界面项并换入 `kimi · Kimi Code`。
@@ -34,7 +34,7 @@
 npm i -D git+https://github.com/asdasd-maker/research-dispatch.git
 
 # 方式 B：从 GitHub Release 离线归档安装
-npm i -D ./research-dispatch-2.1.0.tgz
+npm i -D ./research-dispatch-2.1.2.tgz
 
 # 方式 C：克隆仓库后全局 link（多课题共用）
 git clone https://github.com/asdasd-maker/research-dispatch.git
@@ -61,9 +61,9 @@ npx research-dispatch init --topic my-topic
 
 | 宿主环境 | 接入方式与体验 |
 | --- | --- |
-| **Antigravity（反重力）** | 打开项目即自动识别根 `AGENTS.md` 与 `skills/research-flow/SKILL.md`。直接对 Agent 说「开始科研」或按步骤调用 `npx research-dispatch <子命令>`。 |
+| **Antigravity（反重力 / `agy`）** | 打开项目即自动识别根 `AGENTS.md` 与 `skills/research-flow/SKILL.md`；同时原生支持调用 `agy -p` 作为后台调研/发散/评审/查重执行器，自动同步 `agy models` 模型目录。 |
 | **Claude Code** | 启动自动加载根 `CLAUDE.md`（`@AGENTS.md`）与 `skills/`；当流水线后台调用 `claude -p` 跑调研/发散/盲审/查重时，子进程运行在 `os.tmpdir()` 仓外空目录，不会递归读取项目根 `CLAUDE.md`。 |
-| **Codex CLI / Kimi Code / Gemini CLI** | 自动读取根 `AGENTS.md` 担任主控编排；后台派工调用物理脱离 `.git` 树，保证每张工单零先验泄露。 |
+| **Codex CLI / Kimi Code** | 自动读取根 `AGENTS.md` 担任主控编排；后台派工调用物理脱离 `.git` 树，保证每张工单零先验泄露。 |
 | **Cursor / Cline / Windsurf** | 主会话遵循根 `AGENTS.md` 规程，通过内置终端执行 `npx research-dispatch` 全套纯 Node 闸门（Windows PowerShell / macOS / Linux 原生直跑）。 |
 | **DeepSeek Harness (DSH)** | 执行 `dsh plugin --profile desktop add "link:/abs/path/to/research-dispatch"` 并重启桌面端，额外获得左栏「科研派工 · 全流程阵容」五分区设置面板（保存自动写穿 `dispatch/seats.json`）与内置 `research_dispatch` 向导工具。 |
 
@@ -84,8 +84,8 @@ npx research-dispatch agents --json
 ```bash
 # 独立指定文献调研(scout)、想法发散(diverge + 默认条数与死胡同开关)、多票盲审(review)与前置查重(novelty)：
 npx research-dispatch lineup \
-  --scout gemini:gemini-2.5-pro \
-  --diverge gemini:gemini-2.5-pro \
+  --scout agy:gemini-4-carbon-high \
+  --diverge agy:gemini-4-carbon-high \
   --diverge-count 10 \
   --use-dead-ends \
   --review codex:gpt-5,claude:claude-sonnet-4-5,kimi:kimi-k2.5 \
@@ -101,7 +101,7 @@ npx research-dispatch lineup
 npx research-dispatch lineup --reset
 ```
 
-上述命令原子更新项目内 `dispatch/seats.json` 的四阶段 `lineup` 结构（若引用了 `gemini` 或 `kimi` 且座位表尚未声明，会自动补入内置 CLI 座位定义）：
+上述命令原子更新项目内 `dispatch/seats.json` 的四阶段 `lineup` 结构（若引用了 `agy` 或 `kimi` 且座位表尚未声明，会自动补入内置 CLI 座位定义）：
 
 ```json
 {
@@ -110,10 +110,10 @@ npx research-dispatch lineup --reset
     "require_unique_models": false
   },
   "lineup": {
-    "scout": { "seat": "gemini", "model": "gemini-2.5-pro" },
+    "scout": { "seat": "agy", "model": "gemini-4-carbon-high" },
     "diverge": {
-      "seat": "gemini",
-      "model": "gemini-2.5-pro",
+      "seat": "agy",
+      "model": "gemini-4-carbon-high",
       "count": 10,
       "use_dead_ends": true
     },
@@ -216,7 +216,7 @@ npx research-dispatch check-contract contract/exp01.md --re-record --reason "修
 当通过 `dsh plugin --profile desktop add "link:/abs/path/to/research-dispatch"` 挂载进 DSH 时：
 1. **「科研派工 · 全流程阵容」五分区设置面板（`lib/client.js` → `settings.section`）**：
    - 按科研闭环依次提供 **`工作流项目`**（项目路径）、**`文献调研`**（S0）、**`想法发散`**（S2：执行工具、模型、单轮默认条数 `1–50`、历史死胡同过滤开关）、**`多票评审`**（S4：自由增删票与同工具多票）与 **`前置查重`**（S4.5）。
-   - 执行工具精选五大真实 CLI（`codex` / `claude` / `dsh` / `gemini` / `kimi`），模型弹层常驻搜索框、支持手输任意自定义模型名回车即选、支持一键恢复工具默认模型。
+   - 执行工具精选五大真实 CLI（`codex` / `claude` / `dsh` / `agy` / `kimi`），模型弹层常驻搜索框、支持手输任意自定义模型名回车即选、支持一键恢复工具默认模型。
    - **保存写穿同步**：点击底部「保存」自动通过 `syncPanelLineupToSeats` 将四阶段阵容写回项目 `dispatch/seats.json` `lineup`，桌面端与命令行无缝共享。
 2. **向导工具 `research_dispatch`（`lib/flow-tools.mjs`）**：暴露 `classify`、`agents`、`status`、`summary`、`preview`、`state_get`、`state_set` 七类零花钱动作（自动附带四阶段 `lineup` 与 `stages` 快照）。
 3. **交互式技能 `research-flow`（`skills/research-flow/SKILL.md`）**：按确定性问序引导全流程，真实调用模型计费前必先 `--dry` / `preview` 免费预演并等待人工确认。
@@ -232,7 +232,7 @@ npx research-dispatch check-contract contract/exp01.md --re-record --reason "修
 | `research-dispatch/workflow` | `./lib/workflow.mjs` | `initProject`、`checkPaperCard`、`assemblePaperPool`、`makeBriefs`、`checkNoveltyReport`、`checkContractFile`、`watchRepro` |
 | `research-dispatch/pilot-stats` | `./lib/pilot-stats.mjs` | `computePairedStats`、`formatPairedStatsReport`（配对 Bootstrap、`2σ MDE` 与合规子集分析） |
 | `research-dispatch/validators` | `./lib/validators.mjs` | `checkAnchor`、`extractCardVerdict`、`checkCardFile`、`scanPendingVerdicts`、`summarizeTopic`、`maskSecrets`、`apiChatCompletion` |
-| `research-dispatch/models` | `./lib/models.mjs` | 零子进程深度模型探测（`probeAgentModelsFromConfigs`、`scanGeminiCliPackageModels`）、模型归一化、家族归属与署名核验 |
+| `research-dispatch/models` | `./lib/models.mjs` | 本地模型探测与缓存同步（`probeAgentModelsFromConfigs`、`refreshAgyModelsCache`、`agyConfigModel`）、模型归一化、家族归属与署名核验 |
 | `research-dispatch/bin` | `./bin/dispatch.mjs` | CLI 主入口 |
 | `research-dispatch/client` | `./lib/client.js` | DSH Web 五分区全流程设置面板客户端 bundle |
 

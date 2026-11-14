@@ -49,9 +49,9 @@
 # 1. 初始化目录骨架与角色/契约模板（已有文件默认跳过，不覆盖）
 npx research-dispatch init [--topic <slug>] [--force]
 
-# 2. 探测本机已安装的 CLI/API Agent 与模型，自由编排发散位与评审阵容
-npx research-dispatch agents [--json]
-npx research-dispatch lineup --review codex:gpt-5,claude:claude-sonnet-4 --diverge codex:gpt-5
+# 2. 探测本机已安装的五大 CLI（codex / claude / dsh / agy / kimi）与模型，自由编排四阶段阵容
+npx research-dispatch agents [--refresh] [--json]
+npx research-dispatch lineup --scout agy --diverge agy --review codex:gpt-5,claude:claude-sonnet-4 --novelty claude
 npx research-dispatch lineup --reset
 
 # 3. 文献卡校验与文献池装配

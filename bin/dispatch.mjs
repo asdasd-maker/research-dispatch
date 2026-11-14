@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 全链路纯 Node 普适研究流水线 CLI 主入口（v2.1.0）：
+// 全链路纯 Node 普适研究流水线 CLI 主入口（v2.1.2）：
 // 覆盖一键初始化、跨宿主 Agent/模型探测、四阶段自由阵容编排（scout / diverge / review / novelty）、
 // S0 文献调研派工与成池、S1 基线监控、S2 双模式候选发散、S3 自包含盲审拆单、
 // S4 仓外隔离多 Agent 评审与五维排序总表、S4.5 前置查重派工与 Pilot 2σ 统计检验、S5 状态盘面、S6 契约冻结。
@@ -32,6 +32,7 @@ import {
   resolveModel,
   dshLiveModel,
   expandHome,
+  refreshAgyModelsCache,
 } from '../lib/models.mjs';
 import {
   scanPendingVerdicts,
@@ -187,7 +188,7 @@ const USAGE = [
   '',
   '  初始化与阵容编排：',
   '    init [目录] [--force] [--topic <slug>]       在项目目录生成跨宿主研究流水线骨架（AGENTS.md / seats.json / 模板）',
-  '    agents [--json]                              探测本机已安装的 CLI Agent、API 环境变量及可用模型目录',
+  '    agents [--json] [--refresh]                  探测本机已安装的 CLI Agent、API 环境变量及可用模型目录',
   '    lineup [--scout <spec>] [--diverge <spec>]   查看或持久化更新项目 dispatch/seats.json 的四阶段阵容与发散策略',
   '           [--diverge-count <N>] [--use-dead-ends | --no-dead-ends]',
   '           [--review <spec>] [--novelty <spec>] [--reset] [--require-unique-models] [--json]',
@@ -277,11 +278,12 @@ export async function main(argv) {
 
   // ── 2) agents ───────────────────────────────────────────────────────────
   if (cmd === 'agents') {
-    const p = parseCliFlags(rest, { booleans: ['json'] });
+    const p = parseCliFlags(rest, { booleans: ['json', 'refresh'] });
     if (!p.ok) {
       process.stderr.write('✗ ' + p.error + '\n');
       return 1;
     }
+    await refreshAgyModelsCache({ force: Boolean(p.flags.refresh), timeoutMs: 6000 });
     const res = discoverAgents(root);
     if (p.flags.json) {
       process.stdout.write(JSON.stringify(res, null, 2) + '\n');
