@@ -37,6 +37,8 @@ const fakeReact = {
 const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms) => (ms >= 3000 ? 0 : realSetTimeout(fn, ms));
 globalThis.clearTimeout = () => {};
+globalThis.setInterval = () => 0;
+globalThis.clearInterval = () => {};
 
 let reg = null;
 globalThis.window = { __ModuleLoader__: { load: (r) => { reg = r; } } };
@@ -880,8 +882,8 @@ const readyApi = {
       headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
       socket: { remoteAddress: '127.0.0.1' },
     }));
-    ok(!!liveSnap && liveSnap.version === '2.1.2' && liveSnap.catalog.includes('agy:'),
-      'v2.1.2：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
+    ok(!!liveSnap && liveSnap.version === '2.2.0' && liveSnap.catalog.includes('agy:'),
+      'v2.2.0：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
 
     const catFromBridge = mod.__test.panelCatalog({ executorCatalog: '' }, { get: () => undefined }, null);
     ok(catFromBridge.some((c) => c.exec === 'agy' && c.models.length >= 6),
@@ -900,6 +902,246 @@ const readyApi = {
       'v2.1.2：离线 schemaShim.toJSON() 产出标准 { uid, refs } 并被 propsFromSchema 正常读取');
 
     mod.__test.resetBridgeSnapshot();
+  }
+
+  // ── v2.2.0 新增契约：四槽位注册 + .dsh/profiles 黑名单净化 + seats.json 双向回显 + /swarm 拓扑与人类裁决台 ──
+  {
+    const expandTree = (n) => {
+      if (n === null || n === undefined || typeof n !== 'object') return n;
+      if (Array.isArray(n)) return n.map(expandTree);
+      if (typeof n.type === 'function') return expandTree(n.type(n.props || {}));
+      return { ...n, props: { ...(n.props || {}), children: expandTree((n.props || {}).children) } };
+    };
+    const findAll = (rootNode, pred) => {
+      const acc = [];
+      (function scan(x) {
+        if (x === null || x === undefined || typeof x !== 'object') return;
+        if (Array.isArray(x)) { x.forEach(scan); return; }
+        if (typeof x.type === 'function') { scan(x.type(x.props || {})); return; }
+        if (pred(x)) acc.push(x);
+        if (x.props) scan(x.props.children);
+      })(rootNode);
+      return acc;
+    };
+    const textOf = (rootNode) => {
+      const chunks = [];
+      (function scan(x) {
+        if (x === null || x === undefined || x === false || x === true) return;
+        if (typeof x === 'string' || typeof x === 'number') { chunks.push(String(x)); return; }
+        if (Array.isArray(x)) { x.forEach(scan); return; }
+        if (typeof x.type === 'function') { scan(x.type(x.props || {})); return; }
+        if (x && x.props) scan(x.props.children);
+      })(rootNode);
+      return chunks.join('');
+    };
+    const JARGON_RE = /dispatch\/|\.sh\b|\.json|default_backends|seats\[|model_override|executor_override|subagent|tmux|kimi-k3|命名空间|网关/;
+
+    // 1) 四槽位注册验证（settings.section.icon / conversation.view / conversation.session.header.utilities / settings.section）
+    const slotBag = [];
+    let openedView = null;
+    mod.apply({
+      slots: {
+        inject: (slotName, fn) => { slotBag.push({ slot: slotName, ...fn() }); },
+        register: (def, comp) => ({ def, comp }),
+      },
+      get: (n) => (n === 'conversationView' ? { openView: (id, sub) => { openedView = { id, sub }; } } : undefined),
+      remote: { settings: { describe: async () => ({ ok: true, value: { namespaces: [] } }) } },
+    });
+    const slotNames = slotBag.map((s) => s.slot);
+    ok(slotNames.includes('settings.section.icon')
+      && slotNames.includes('conversation.view')
+      && slotNames.includes('conversation.session.header.utilities')
+      && slotNames[slotNames.length - 1] === 'settings.section',
+      'v2.2.0：客户端同时注册设置图标、会话顶栏科研拓扑视图、会话顶栏快捷胶囊与设置页主面板');
+
+    const convViewSlot = slotBag.find((s) => s.slot === 'conversation.view');
+    const pillSlot = slotBag.find((s) => s.slot === 'conversation.session.header.utilities');
+    ok(convViewSlot && convViewSlot.def.id === 'research-swarm' && convViewSlot.def.label() === '科研拓扑',
+      'v2.2.0：conversation.view 注册 id=research-swarm（标题“科研拓扑”）');
+    hookCursor = 0;
+    const pillTree = expandTree(pillSlot.comp({ session: { id: 's1', cwd: repo } }));
+    pillTree.props.onClick();
+    ok(!!openedView && openedView.id === 'research-swarm',
+      'v2.2.0：点击会话顶栏“科研拓扑”胶囊直接唤醒 conversationView.openView("research-swarm")');
+
+    // 2) .dsh/profiles/desktop 黑名单净化与 DSH workspace.json 自动识别
+    const fakeDshRoot = process.env.DSH_HOME;
+    const fakeProfileDir = path.join(fakeDshRoot, 'profiles', 'desktop');
+    fs.mkdirSync(path.join(fakeDshRoot, 'storages'), { recursive: true });
+    fs.mkdirSync(fakeProfileDir, { recursive: true });
+    fs.writeFileSync(path.join(fakeDshRoot, 'storages', 'workspace.json'), JSON.stringify({
+      tables: {
+        workspaces: {
+          ws_bad: { id: 'ws_bad', path: fakeProfileDir, name: 'desktop', updatedAt: '2026-11-15T01:00:00Z' },
+          ws_good: { id: 'ws_good', path: repo, name: '科研工作流', updatedAt: '2026-11-15T00:00:00Z' },
+        },
+      },
+    }), 'utf8');
+    ok(host.resolveDefaultRepoRoot(fakeProfileDir) === repo
+      && host.repoRootOf({ repoRoot: fakeProfileDir }) === repo,
+      'v2.2.0：宿主层遇到 .dsh/profiles/desktop 自动拉黑并切换到含 dispatch/seats.json 的真实科研工作区');
+
+    // 3) 多路由 webServer 桥（/executors + /swarm-state + /action）+ 前端项目继承回显 + 科研拓扑 SVG 渲染 + 人工拍板写盘
+    fs.mkdirSync(path.join(repo, 'ideas', 'demo-topic', 'briefs'), { recursive: true });
+    fs.mkdirSync(path.join(repo, 'ideas', 'demo-topic', 'cards'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'ideas', 'demo-topic', 'briefs', 'idea_01.md'),
+      '# idea_01: Dual-Stage Sparse Gating\n\n<!-- meta isha=111122223333 bsha=444455556666 -->\n- 预测: +2.0\n- 主读数: acc\n- 判据: >= 2sigma\n', 'utf8');
+    fs.writeFileSync(path.join(repo, 'ideas', 'demo-topic', 'cards', 'idea_01.codex.md'), [
+      '<!-- meta role=reviewer idea=idea_01 seat=codex model=gpt-5 sha=aaaa11112222 -->',
+      '```yaml',
+      'idea_id: idea_01',
+      'reviewer: codex',
+      'model: gpt-5',
+      'novelty: { score: 4, reason: "门控分解清晰" }',
+      'feasibility: { score: 4, reason: "单卡两小时可验" }',
+      'baseline_fit: { score: 5, reason: "零侵入挂载基线" }',
+      'impl_cost: { score: 4, reason: "仅改 40 行" }',
+      'expected_gain: { score: 4, reason: "越过 2sigma" }',
+      'verdict: go',
+      '```',
+      '建议推进短探针核验。',
+      '',
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(repo, 'ideas', 'demo-topic', '_summary.md'), [
+      '# 评审汇总（demo-topic）',
+      '',
+      '| Rank | Idea | N | F | C | Cost | G | 总均分(/25) | 票型 | 裁决 |',
+      '|---|---|---|---|---|---|---|---|---|---|',
+      '| #1 | idea_01 | 4.0 | 4.0 | 5.0 | 4.0 | 4.0 | 21.0 | 1G/0R/0K | *(待填)* |',
+      '',
+    ].join('\n'), 'utf8');
+
+    const routeMap = {};
+    host.apply({
+      logger: () => ({ info() {}, error() {} }),
+      inject: (deps, fn) => {
+        if (Array.isArray(deps) && deps.includes('webServer')) {
+          fn({
+            webServer: { register: (r) => { routeMap[r.path] = r; return () => {}; } },
+            effect: (eff) => { eff(); },
+          });
+        }
+      },
+      on: () => () => {},
+    }, { repoRoot: repo });
+
+    ok(!!routeMap['/api/research-dispatch/executors']
+      && !!routeMap['/api/research-dispatch/swarm-state']
+      && !!routeMap['/api/research-dispatch/action'],
+      'v2.2.0：webServer 注册齐备 /executors、/swarm-state、/action 三条本地回环桥路由');
+
+    const mockFetch = async (url, opts = {}) => {
+      const u = new URL(url, 'http://127.0.0.1:3080');
+      const r = routeMap[u.pathname];
+      if (!r) return { status: 404, ok: false, json: async () => ({ ok: false }) };
+      let code = 0;
+      let raw = '';
+      const bodyBuf = opts.body ? Buffer.from(String(opts.body), 'utf8') : Buffer.alloc(0);
+      const reqObj = {
+        method: opts.method || 'POST',
+        url: u.pathname + u.search,
+        headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
+        socket: { remoteAddress: '127.0.0.1' },
+        [Symbol.asyncIterator]: async function* () { if (bodyBuf.length) yield bodyBuf; },
+      };
+      await r.handler(reqObj, {
+        writeHead(c) { code = c; },
+        end(p) { raw = String(p || ''); },
+      });
+      return { status: code, ok: code >= 200 && code < 300, json: async () => JSON.parse(raw || '{}') };
+    };
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch;
+
+    try {
+      await mod.__test.fetchBridgeSnapshot(mockFetch, fakeProfileDir);
+      let savedPatch = null;
+      mount({
+        remote: {
+          settings: {
+            describe: async () => ({
+              ok: true,
+              value: {
+                namespaces: [{
+                  ns: 'research-dispatch',
+                  revision: 9,
+                  user: {},
+                  value: {
+                    ...FULL_VALUE,
+                    repoRoot: fakeProfileDir,
+                    scoutCommand: '',
+                    divergeCommand: '',
+                    reviewVotes: '',
+                    noveltyCommand: '',
+                  },
+                  schema: REAL_SCHEMA,
+                }],
+              },
+            }),
+            update: async (arg) => { savedPatch = arg; return { ok: true }; },
+          },
+        },
+      });
+
+      let p22 = await settle(render());
+      const pathInput = p22.inputs.find((p) => String(p.className || '').includes('rdp-in-path'));
+      ok(pathInput && pathInput.value === repo,
+        'v2.2.0：前端面板发现旧配置误存 .dsh/profiles/desktop 时自动净化为真实科研项目根目录');
+      ok(p22.texts.some((t) => t.includes('项目默认：')) && p22.texts.some((t) => t.includes('载入项目默认阵容微调')),
+        'v2.2.0：面板留空时自动回显项目 seats.json 真实默认阵容与一键载入微调按钮');
+      const jargonHit = p22.texts.find((t) => JARGON_RE.test(t));
+      ok(!jargonHit, 'v2.2.0：Bento 升级后的「阵容编排」页依然保持零底层术语泄漏' + (jargonHit ? '（命中：' + jargonHit + '）' : ''));
+
+      // 切换到「科研拓扑」Tab，验证 S0→S6 流水线导轨 + SVG 贝塞尔 /swarm 关系图 + 五维拆解条 + 人工拍板写盘
+      const swarmTabBtn = p22.buttons.find((b) => textOf(b.children).includes('科研拓扑'));
+      ok(!!swarmTabBtn, 'v2.2.0：设置页顶栏提供「科研拓扑」分段切换器');
+      swarmTabBtn.onClick();
+      p22 = await settle(render());
+      p22 = await settle(render());
+
+      hookCursor = 0;
+      const expandedSwarm = expandTree(p22.tree);
+      const svgPaths = findAll(expandedSwarm, (n) => n.type === 'path' && String(n.props.className || '').includes('rdp-edge'));
+      const svgNodes = findAll(expandedSwarm, (n) => n.type === 'g' && String(n.props.className || '').includes('rdp-gnode'));
+      ok(svgPaths.length >= 4 && svgNodes.length >= 5 && p22.texts.some((t) => t.includes('idea_01')) && p22.texts.some((t) => t.includes('21.0/25')),
+        'v2.2.0：「科研拓扑」渲染 S0→S6 全链路、三次贝塞尔 /swarm 拓扑边与节点、以及 #1 idea_01 (21.0/25) 读数');
+
+      // 验证人类唯一裁决权：点击 KILL 裁决动作通过 /action 路由原子写入 verdict-idea_01.md 与 dead-ends.md
+      const verdictResp = await mod.__test.postDispatchAction({
+        kind: 'verdict',
+        repoRoot: repo,
+        topic: 'demo-topic',
+        ideaId: 'idea_01',
+        decision: 'kill',
+        reason: '机制与现有门控等价',
+        deadEndLine: '禁止简单双阶段稀疏门控重命名',
+      }, mockFetch);
+      const verdictDisk = fs.readFileSync(path.join(repo, 'ideas', 'demo-topic', 'verdict-idea_01.md'), 'utf8');
+      const deadEndsDisk = fs.readFileSync(path.join(repo, 'ideas', 'demo-topic', 'dead-ends.md'), 'utf8');
+      ok(verdictResp && verdictResp.ok === true
+        && verdictDisk.includes('决定: kill')
+        && deadEndsDisk.includes('禁止简单双阶段稀疏门控重命名'),
+        'v2.2.0：人类裁决台落盘写入 verdict-idea_01.md（决定: kill）并同步沉淀课题 dead-ends.md');
+
+      let badActionErr = '';
+      try {
+        await mod.__test.postDispatchAction({
+          kind: 'verdict',
+          repoRoot: repo,
+          topic: 'demo-topic',
+          ideaId: 'idea_01',
+          decision: 'auto_approve',
+        }, mockFetch);
+      } catch (e) {
+        badActionErr = String((e && e.message) || e);
+      }
+      ok(badActionErr.includes('go、revise 或 kill'),
+        'v2.2.0：非法裁决枚举（非 go/revise/kill）被宿主闸门严格拦截');
+      void savedPatch;
+    } finally {
+      globalThis.fetch = prevFetch;
+      mod.__test.resetBridgeSnapshot();
+    }
   }
 
   if (prevDiag === undefined) delete process.env.RESEARCH_DISPATCH_DIAG; else process.env.RESEARCH_DISPATCH_DIAG = prevDiag;

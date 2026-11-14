@@ -1,15 +1,15 @@
 # research-dispatch
 
-**Universal Pure-Node AI Research Workflow Engine (`v2.1.2`)**
+**Universal Pure-Node AI Research Workflow Engine (`v2.2.0`)**
 *Literature Scout (LaTeX/Markdown-First) → Baseline Repro Gate → Dual-Mode Divergence → Out-of-Repo Multi-Agent Blind Review & Ranked 5D Summary → Pre-Contract Novelty & Paired `2σ` Pilot Stats → Human Verdict → Frozen Experiment Contract.*
 
 普适纯 Node 科研流程引擎：把「文献调研成池（优先抓取 arXiv LaTeX/Markdown 免 PDF 乱序）→ 基线复现签字 → 双模式候选发散（默认 10 条，支持挂载死胡同记忆或纯空白零锚定模式）→ 仓外物理隔离的多 Agent 盲审与五维 `/25` 自动 Ranking 总表 → 单工单隔离前置查重与 ≤2h Pilot 配对统计探针 → 人类唯一裁决 → 实验与消融契约哈希冻结」做成一套**零外部脚本依赖、跨主流 AI 编程宿主开箱即用**的确定性流水线。
 
-> **English Overview**: `research-dispatch` v2.1.2 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity (`agy`)**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
+> **English Overview**: `research-dispatch` v2.2.0 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity (`agy`)**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
 
 ---
 
-## 核心特性（v2.1.2）
+## 核心特性（v2.2.0）
 
 - **四大 AI 阶段全流程独立编排（`scout` / `diverge` / `review` / `novelty`）**：
   - **S0 文献调研（`scout`）**：自动读取 `roles/scout.md`、注入已有文献去重清单、要求优先提取 arXiv LaTeX/HTML/Markdown 源码信息，自动切分多卡、逐张执行 `check-paper`（坏卡隔离至 `rejected/`），支持 `--pool` 一键刷新 `papers/cards/_pool.md`。
@@ -20,10 +20,10 @@
   - 原生支持 **`codex`（Codex CLI）**、**`claude`（Claude Code）**、**`dsh`（DeepSeek Harness）**、**`agy`（Antigravity CLI，`--output-format text --disable-slash-commands`）**、**`kimi`（Kimi Code，`--output-format text`）** 五大真实 CLI 工具（底层仍兼容编程式 `api` / `delivery` 座位）。
   - 毫秒级本地配置与模型目录扫描（零密钥值读取）：自动聚合 `~/.codex/{config.toml,models_cache.json,cc-switch-model-catalog.json}`、`~/.claude/settings.json`（含 `ANTHROPIC_*MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` / `availableModels`）、`~/.dsh/{settings.yaml,storages/*catalog*.json}` 与 `cordis.patch.yml` 模型 ID、`~/.gemini/antigravity-cli/{settings.json,cache/models_cache.json}`（支持 `agy models` 异步实时刷新缓存）、`~/.kimi/config.toml`（顶层与 `[models.*]` 节）。
 - **仓外临时目录物理隔离（`os.tmpdir()`）**：全部外部 CLI 子进程默认在系统临时目录（项目 `.git` 树之外）启动，向上遍历父目录永远读不到项目根 `AGENTS.md` 或 `CLAUDE.md`。
-- **DSH 全流程五分区面板 + 保存即写穿同步（Write-Through）**：
-  - DSH 桌面端设置页按科研闭环排布「`工作流项目` → `文献调研` → `想法发散` → `多票评审` → `前置查重`」五大分区，剔除令人困惑的 `api` 界面项并换入 `kimi · Kimi Code`。
-  - **`ModelPicker` 零死锁交互**：弹层常驻顶部搜索兼自定义模型输入框（即使探测模型数为 `0` 也常驻），支持一键切回 `默认（使用该工具自身默认模型）`，输入任意新模型名回车即可直接选用 `使用自定义模型：<名称>`。
-  - **面板保存自动写穿 `dispatch/seats.json`**：点击底部「保存」时，宿主通过 `syncPanelLineupToSeats`（监听 `loader/volatile-update`）自动将四阶段阵容同步写回所选项目的 `dispatch/seats.json` `lineup`（绝不触碰手写 `seats[i].model_override`），桌面端与外部终端实时共享生效。
+- **DSH 旗舰 Bento 编排工作台 + Antigravity `/swarm` 级实时科研拓扑星图（v2.2.0）**：
+  - **双栖入口**：既可在 DSH 左栏「科研派工」设置页顶部分段切换 `[ 阵容编排 | 科研拓扑 ]`，也可在任意会话右上角点击「科研拓扑」动态胶囊一键展开全屏 `conversation.view` 拓扑画布。
+  - **S0→S6 双层联动 `/swarm` 拓扑星图**：顶部八阶段进度轨联动下方四列三次贝塞尔平滑扇出图（`推式输入源 → 主控派工与门禁 → 独立沙箱 Workers → 榜单与人类唯一裁决`），实时追踪 Worker 沙箱 PID 活性、耗时脉冲、推式 `sha` 指纹、五维打分条与落盘原文预览。
+  - **人类唯一裁决台与智能工作区识别**：右侧检查器内置人工 `GO / REVISE / KILL` 原子签写台（`KILL` 支持同步追加课题 `dead-ends.md`），严守「禁止模型互相收敛代替拍板」硬约束；自动扫描 DSH 工作区列表并拉黑 `.dsh/profiles/*` 内部配置目录，双向回显项目 `dispatch/seats.json` 默认阵容且点击保存自动写穿。
 
 ---
 
@@ -34,7 +34,7 @@
 npm i -D git+https://github.com/asdasd-maker/research-dispatch.git
 
 # 方式 B：从 GitHub Release 离线归档安装
-npm i -D ./research-dispatch-2.1.2.tgz
+npm i -D ./research-dispatch-2.2.0.tgz
 
 # 方式 C：克隆仓库后全局 link（多课题共用）
 git clone https://github.com/asdasd-maker/research-dispatch.git
@@ -233,8 +233,9 @@ npx research-dispatch check-contract contract/exp01.md --re-record --reason "修
 | `research-dispatch/pilot-stats` | `./lib/pilot-stats.mjs` | `computePairedStats`、`formatPairedStatsReport`（配对 Bootstrap、`2σ MDE` 与合规子集分析） |
 | `research-dispatch/validators` | `./lib/validators.mjs` | `checkAnchor`、`extractCardVerdict`、`checkCardFile`、`scanPendingVerdicts`、`summarizeTopic`、`maskSecrets`、`apiChatCompletion` |
 | `research-dispatch/models` | `./lib/models.mjs` | 本地模型探测与缓存同步（`probeAgentModelsFromConfigs`、`refreshAgyModelsCache`、`agyConfigModel`）、模型归一化、家族归属与署名核验 |
+| `research-dispatch/telemetry` | `./lib/telemetry.mjs` | 实时沙箱 Worker 遥测账本、DSH 工作区发现、`S0→S6` 盘面快照 `buildSwarmSnapshot` 与人工裁决原子落盘 `writeHumanVerdict` |
 | `research-dispatch/bin` | `./bin/dispatch.mjs` | CLI 主入口 |
-| `research-dispatch/client` | `./lib/client.js` | DSH Web 五分区全流程设置面板客户端 bundle |
+| `research-dispatch/client` | `./lib/client.js` | DSH Bento 全流程编排工作台 + `/swarm` 科研拓扑星图客户端 bundle |
 
 ---
 
@@ -242,8 +243,9 @@ npx research-dispatch check-contract contract/exp01.md --re-record --reason "修
 
 ```text
 bin/dispatch.mjs              全链路 CLI 入口（init / agents / lineup / scout / pool / diverge / briefs / run / summary / novelty / pilot-stats / check-contract …）
-lib/index.js                  DSH 插件宿主外壳（统一深度模型目录 + 面板保存写穿 syncPanelLineupToSeats）
-lib/client.js                 DSH 五分区全流程设置面板 bundle（五大 CLI 工具 + 常驻搜索与自定义模型输入）
+lib/index.js                  DSH 插件宿主外壳（深度模型目录 + 实时拓扑/裁决回环桥 + 面板保存写穿 syncPanelLineupToSeats）
+lib/client.js                 DSH Bento 编排工作台 + /swarm 实时科研拓扑星图客户端 bundle
+lib/telemetry.mjs             实时沙箱遥测账本、工作区智能识别、S0→S6 拓扑图聚合与人类裁决写盘引擎
 lib/workflow.mjs              上下游纯 Node 确定性闸门与跨宿主 initProject 脚手架
 lib/pilot-stats.mjs           Pilot 探针配对统计检验与合规子集偏差分析
 lib/validators.mjs            锚点校验、YAML 卡片校验、待裁决扫描、五维 /25 自动 Ranking 总表 _summary.md 与内置 API 调用
@@ -253,7 +255,7 @@ lib/models.mjs                五大 CLI 零子进程深度模型探测、模型
 lib/flow-tools.mjs            research_dispatch 向导工具实现（含四阶段快照暴露）
 lib/settings-file.mjs         DSH cordis.patch.yml 作用域受控读取
 examples/                     内置 AGENTS.md / CLAUDE.md / seats.example.json / 四大角色与实验契约标准模板
-skills/research-flow/         跨宿主通用科研流程向导技能（v2.1.0）
+skills/research-flow/         跨宿主通用科研流程向导技能（v2.2.0）
 docs/CARD-STYLE.md            五分区设置卡片视觉与文案规范
 cordis.patch.yml              DSH 插件装配声明
 test/                         全离线五套自检套件与静态预览生成器（零联网、不依赖真实付费密钥）

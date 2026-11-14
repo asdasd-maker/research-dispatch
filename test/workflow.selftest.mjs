@@ -32,6 +32,7 @@ const wf = await import(pathToFileURL(path.join(SRC, 'lib', 'workflow.mjs')).hre
 const ps = await import(pathToFileURL(path.join(SRC, 'lib', 'pilot-stats.mjs')).href);
 const val = await import(pathToFileURL(path.join(SRC, 'lib', 'validators.mjs')).href);
 const { buildDshModelOverrideFiles } = await import(pathToFileURL(path.join(SRC, 'lib', 'run.mjs')).href);
+const tel = await import(pathToFileURL(path.join(SRC, 'lib', 'telemetry.mjs')).href);
 
 let checks = 0;
 let fails = 0;
@@ -1536,6 +1537,20 @@ try {
     assert.equal(rNov.rc, 0, 'novelty idea_01 应退 0：\n' + rNov.out);
     assert.ok(fs.existsSync(path.join(v21Ws, 'papers', 'novelty', 'idea_01.md')));
     assert.equal(runCli(v21Ws, ['check-novelty', 'papers/novelty/idea_01.md']).rc, 0);
+
+    // v2.2.0 遥测账本与 /swarm 拓扑快照聚合闭环校验
+    const ledger = tel.readTelemetryLedger(v21Ws);
+    assert.ok(Array.isArray(ledger.runs) && ledger.runs.length >= 3, 'scout / diverge / novelty 均应落盘遥测账本记录');
+    const stagesSeen = new Set(ledger.runs.map((r) => r.stage));
+    assert.ok(stagesSeen.has('S0') && stagesSeen.has('S2') && stagesSeen.has('S4.5'), '遥测账本应完整记录 S0 / S2 / S4.5 各阶段运行');
+    const swarmSnap = tel.buildSwarmSnapshot(v21Ws, { topic: v21Topic, focusStage: 'S4.5', focusIdeaId: 'idea_01' });
+    assert.equal(swarmSnap.ok, true);
+    assert.equal(swarmSnap.stages.length, 8, 'S0→S6 八阶段流水线轨完整');
+    assert.ok(swarmSnap.graph.nodes.length >= 4 && swarmSnap.graph.edges.length >= 3, 'S4.5 拓扑图节点与连线完整');
+    const vRes = tel.writeHumanVerdict(v21Ws, { topic: v21Topic, ideaId: 'idea_01', decision: 'go', note: '配对探针通过' });
+    assert.equal(vRes.ok, true);
+    const swarmAfterGo = tel.buildSwarmSnapshot(v21Ws, { topic: v21Topic, focusStage: 'S6', focusIdeaId: 'idea_01' });
+    assert.ok(swarmAfterGo.ideas.some((i) => i.ideaId === 'idea_01' && i.verdict === 'go'), '人类拍板 GO 后拓扑盘面实时同步');
   });
 
 } finally {
