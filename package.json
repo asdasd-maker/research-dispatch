@@ -1,7 +1,7 @@
 {
   "name": "research-dispatch",
-  "version": "2.1.0",
-  "description": "Universal pure-Node AI research workflow engine (v2.1.0): 4-stage multi-agent orchestration (literature scout, blank-slate or dead-end-aware diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), paired pilot stats, and frozen contracts across Antigravity, Claude Code, Codex, Cursor, Kimi Code, Gemini CLI, and DeepSeek Harness.",
+  "version": "2.1.1",
+  "description": "Universal pure-Node AI research workflow engine (v2.1.1): 4-stage multi-agent orchestration (literature scout, blank-slate or dead-end-aware diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), live CLI model discovery, paired pilot stats, and frozen contracts across Antigravity, Claude Code, Codex, Cursor, Kimi Code, Gemini CLI, and DeepSeek Harness.",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {

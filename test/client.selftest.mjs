@@ -755,6 +755,140 @@ const readyApi = {
     && host.plainValue(undefined) === undefined,
     'plainValue 兼容 volatile 包装与裸值');
 
+  // ── v2.1.1 回归：schema 默认目录兜底 + 托盘驻留旧后台检测提示 + 实时 /api/research-dispatch/executors 桥 ──
+  {
+    mod.__test.resetBridgeSnapshot();
+    mod.__test.resetLiveCatalog();
+    mod.__test.resetModelDirs();
+
+    // 1) 当 desc.value.executorCatalog 为空或残留旧串时，自动合并 desc.schema 的 meta.default 模型目录
+    const schemaWithDefaults = JSON.parse(JSON.stringify(REAL_SCHEMA));
+    schemaWithDefaults.refs['45'].meta.default = 'codex:gpt-5.4;claude:claude-sonnet-4-5;dsh:;gemini:gemini-2.5-pro|gemini-2.5-flash;kimi:kimi-k2-thinking';
+    schemaWithDefaults.refs['49'].meta.default = 'codex:1;claude:1;dsh:1;gemini:1;kimi:0';
+    const schemaProps = mod.__test.propsFromSchema(schemaWithDefaults);
+    const catRecovered = mod.__test.panelCatalog({ executorCatalog: 'codex:;claude:;dsh:;gemini:;api:' }, { get: () => undefined }, schemaProps);
+    const gemRow = catRecovered.find((c) => c.exec === 'gemini');
+    const stRecovered = mod.__test.effectiveStatusOf({ executorStatus: '' }, schemaProps);
+    ok(!!gemRow && gemRow.models.includes('gemini-2.5-pro') && gemRow.models.includes('gemini-2.5-flash'),
+      'v2.1.1：desc.value.executorCatalog 为旧版空值时，自动从 desc.schema.default 恢复完整探测模型列表');
+    ok(stRecovered.gemini === true && stRecovered.kimi === false,
+      'v2.1.1：desc.value.executorStatus 为空时，自动从 desc.schema.default 恢复 CLI 安装标记');
+
+    // 2) Windows 托盘驻留分脑（前端热更到 v2.1.x，后台仍为 v2.0.0 schema）时渲染明确托盘退出提示横幅
+    const v20Schema = {
+      uid: 30,
+      refs: {
+        '1': { type: 'string', meta: { default: '/repo', volatile: true } },
+        '2': { type: 'string', meta: { default: '', volatile: true } },
+        '3': { type: 'string', meta: { default: 'codex:;claude:;dsh:;gemini:;api:', volatile: true } },
+        '30': {
+          type: 'object',
+          meta: { default: {} },
+          dict: { repoRoot: 1, divergeCommand: 2, reviewVotes: 2, executorCatalog: 3 },
+        },
+      },
+    };
+    ok(mod.__test.isBackendOutdated({ ns: 'research-dispatch', schema: v20Schema, value: {} }) === true
+      && mod.__test.isBackendOutdated({ ns: 'research-dispatch', schema: REAL_SCHEMA, value: {} }) === false,
+      'v2.1.1：isBackendOutdated 精准识别 v2.0.0 驻留后台 schema 与 v2.1+ 正常后台');
+
+    mount({
+      remote: {
+        settings: {
+          describe: async () => ({
+            ok: true,
+            value: { namespaces: [{ ns: 'research-dispatch', revision: 1, user: {}, value: { executorCatalog: 'gemini:' }, schema: v20Schema }] },
+          }),
+        },
+      },
+    });
+    const stalePage = await settle(render());
+    ok(stalePage.texts.some((t) => t.includes('系统托盘') && t.includes('退出')),
+      'v2.1.1：后台仍驻留旧版时顶部显式提示从右下角系统托盘退出重开');
+
+    // 3) 宿主 /api/research-dispatch/executors 实时桥路由（安全守卫 + POST 探测回传 + 前端合并刷新）
+    let registeredRoute = null;
+    let routeDisposed = false;
+    host.apply({
+      logger: () => ({ info() {}, error() {} }),
+      inject: (deps, fn) => {
+        if (Array.isArray(deps) && deps.includes('webServer')) {
+          fn({
+            webServer: {
+              register: (r) => {
+                registeredRoute = r;
+                return () => { routeDisposed = true; };
+              },
+            },
+            effect: (eff) => {
+              const clean = eff();
+              registeredRoute.__dispose = clean;
+            },
+          });
+        }
+      },
+      on: () => () => {},
+    }, { repoRoot: repo });
+
+    ok(!!registeredRoute && registeredRoute.kind === 'exact' && registeredRoute.path === '/api/research-dispatch/executors',
+      'v2.1.1：host.apply() 通过 webServer 可选光纤注册 /api/research-dispatch/executors 实时探测桥');
+
+    const callBridge = async (reqInit) => {
+      let statusCode = 0;
+      let rawBody = '';
+      const mockRes = {
+        writeHead(code) { statusCode = code; },
+        end(payload) { rawBody = String(payload || ''); },
+      };
+      await registeredRoute.handler(reqInit, mockRes);
+      return {
+        status: statusCode,
+        ok: statusCode >= 200 && statusCode < 300,
+        json: async () => JSON.parse(rawBody || '{}'),
+      };
+    };
+
+    const crossSiteResp = await callBridge({
+      method: 'POST',
+      headers: { host: '127.0.0.1:3080', 'sec-fetch-site': 'cross-site' },
+      socket: { remoteAddress: '127.0.0.1' },
+    });
+    ok(crossSiteResp.status === 403, 'v2.1.1：跨站请求被实时桥 403 拦截');
+
+    const getResp = await callBridge({
+      method: 'GET',
+      headers: { host: '127.0.0.1:3080' },
+      socket: { remoteAddress: '127.0.0.1' },
+    });
+    ok(getResp.status === 405, 'v2.1.1：非 POST 请求返回 405');
+
+    const liveSnap = await mod.__test.fetchBridgeSnapshot((url, opts) => callBridge({
+      method: opts.method,
+      headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
+      socket: { remoteAddress: '127.0.0.1' },
+    }));
+    ok(!!liveSnap && liveSnap.version === '2.1.1' && liveSnap.catalog.includes('gemini:'),
+      'v2.1.1：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI 模型目录');
+
+    const catFromBridge = mod.__test.panelCatalog({ executorCatalog: '' }, { get: () => undefined }, null);
+    ok(catFromBridge.some((c) => c.exec === 'gemini' && c.models.length >= 6),
+      'v2.1.1：即使 value 与 schema 均为空，实时桥快照仍可为面板注入完整探测模型（如 gemini ≥6 个模型）');
+
+    if (registeredRoute && typeof registeredRoute.__dispose === 'function') registeredRoute.__dispose();
+    ok(routeDisposed === true, 'v2.1.1：webServer 路由卸载时干净释放');
+
+    // 4) 离线 schemaShim().object(...).toJSON() 与 propsFromSchema 100% 兼容
+    const shimZ = host.__schemaShimForTest();
+    const shimSchema = shimZ.object({
+      executorCatalog: shimZ.string().default('gemini:gemini-2.5-pro').extra('volatile', true),
+    });
+    const shimProps = mod.__test.propsFromSchema(shimSchema.toJSON());
+    ok(!!shimProps && shimProps.executorCatalog && shimProps.executorCatalog.default === 'gemini:gemini-2.5-pro',
+      'v2.1.1：离线 schemaShim.toJSON() 产出标准 { uid, refs } 并被 propsFromSchema 正常读取');
+
+    mod.__test.resetBridgeSnapshot();
+  }
+
   if (prevDiag === undefined) delete process.env.RESEARCH_DISPATCH_DIAG; else process.env.RESEARCH_DISPATCH_DIAG = prevDiag;
   if (prevDshHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevDshHome;
   fs.rmSync(tmp, { recursive: true, force: true });

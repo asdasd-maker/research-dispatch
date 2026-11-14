@@ -1,15 +1,15 @@
 # research-dispatch
 
-**Universal Pure-Node AI Research Workflow Engine (`v2.1.0`)**
+**Universal Pure-Node AI Research Workflow Engine (`v2.1.1`)**
 *Literature Scout (LaTeX/Markdown-First) → Baseline Repro Gate → Dual-Mode Divergence → Out-of-Repo Multi-Agent Blind Review & Ranked 5D Summary → Pre-Contract Novelty & Paired `2σ` Pilot Stats → Human Verdict → Frozen Experiment Contract.*
 
 普适纯 Node 科研流程引擎：把「文献调研成池（优先抓取 arXiv LaTeX/Markdown 免 PDF 乱序）→ 基线复现签字 → 双模式候选发散（默认 10 条，支持挂载死胡同记忆或纯空白零锚定模式）→ 仓外物理隔离的多 Agent 盲审与五维 `/25` 自动 Ranking 总表 → 单工单隔离前置查重与 ≤2h Pilot 配对统计探针 → 人类唯一裁决 → 实验与消融契约哈希冻结」做成一套**零外部脚本依赖、跨主流 AI 编程宿主开箱即用**的确定性流水线。
 
-> **English Overview**: `research-dispatch` v2.1.0 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, **Gemini CLI**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
+> **English Overview**: `research-dispatch` v2.1.1 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, **Gemini CLI**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
 
 ---
 
-## 核心特性（v2.1.0）
+## 核心特性（v2.1.1）
 
 - **四大 AI 阶段全流程独立编排（`scout` / `diverge` / `review` / `novelty`）**：
   - **S0 文献调研（`scout`）**：自动读取 `roles/scout.md`、注入已有文献去重清单、要求优先提取 arXiv LaTeX/HTML/Markdown 源码信息，自动切分多卡、逐张执行 `check-paper`（坏卡隔离至 `rejected/`），支持 `--pool` 一键刷新 `papers/cards/_pool.md`。
