@@ -66,7 +66,10 @@ ok(viaGet && viaGet.ns === 'research-dispatch', 'ctx.get("remote") 兜底路径�
 {
   const pkgJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const deps = (pkgJson.dsh && pkgJson.dsh.client && pkgJson.dsh.client.inject) || [];
-  ok(deps.includes('@deepseek-ai/dsh-client-ui-settings'), '包级 dsh.client.inject 声明了设置域客户端');
+  ok(deps.includes('@deepseek-ai/dsh-client-ui-settings')
+    && deps.includes('@deepseek-ai/dsh-client-connection')
+    && deps.includes('@deepseek-ai/dsh-api-remotes'),
+    'v2.2.1：包级 dsh.client.inject 同时声明 settings / connection / api-remotes 客户端依赖');
   ok(pkgJson.dsh.client.platform === 'web', '包级平台声明为 web');
 }
 
@@ -882,8 +885,8 @@ const readyApi = {
       headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
       socket: { remoteAddress: '127.0.0.1' },
     }));
-    ok(!!liveSnap && liveSnap.version === '2.2.0' && liveSnap.catalog.includes('agy:'),
-      'v2.2.0：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
+    ok(!!liveSnap && liveSnap.version === '2.2.1' && liveSnap.catalog.includes('agy:'),
+      'v2.2.1：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
 
     const catFromBridge = mod.__test.panelCatalog({ executorCatalog: '' }, { get: () => undefined }, null);
     ok(catFromBridge.some((c) => c.exec === 'agy' && c.models.length >= 6),
@@ -1141,6 +1144,212 @@ const readyApi = {
     } finally {
       globalThis.fetch = prevFetch;
       mod.__test.resetBridgeSnapshot();
+      mod.__test.resetSwarmSnapshot();
+    }
+
+    // 4) v2.2.1 Electron 桌面端（file:// 协议 + 无 webServer + connection.fetch.register / connection.rpc）端到端回归
+    const connRoutes = {};
+    let webFallbackDisposed = false;
+    let disposeConnScope = null;
+    let deferredConnInject = null;
+    host.apply({
+      logger: () => ({ info() {}, error() {} }),
+      inject: (deps, fn) => {
+        // 模拟 webServer 先就绪、connection 后异步就绪，验证 connection 挂载后自动卸载备用 webServer 防 /api 冲突
+        if (Array.isArray(deps) && deps.includes('webServer')) {
+          fn({
+            webServer: { register: () => () => { webFallbackDisposed = true; } },
+            effect: (eff) => { eff(); },
+          });
+        }
+        if (Array.isArray(deps) && deps.includes('connection')) {
+          deferredConnInject = fn;
+        }
+      },
+      on: () => () => {},
+    }, { repoRoot: repo });
+    if (deferredConnInject) {
+      deferredConnInject({
+        connection: {
+          fetch: {
+            register: (route) => {
+              connRoutes[route.path] = route;
+              return () => { delete connRoutes[route.path]; };
+            },
+          },
+        },
+        on: (ev, cb) => { if (ev === 'dispose') disposeConnScope = cb; },
+      });
+    }
+
+    ok(!!connRoutes['/api/research-dispatch/swarm-state']
+      && !!connRoutes['/api/research-dispatch/action']
+      && !!connRoutes['/api/research-dispatch/executors']
+      && webFallbackDisposed === true,
+      'v2.2.1：宿主 connection.fetch.register 注册齐三条跨端 RPC 路由，并自动释放先挂载的备用 webServer 路由');
+
+    // 严格复刻 @deepseek-ai/dsh-client-connection 的 parseConnectionResponse 协议校验
+    let rpcSeq = 0;
+    const strictElectronRpc = {
+      async call(channel, endpoint, payload) {
+        const fullPath = channel + '/' + endpoint;
+        const route = connRoutes[fullPath];
+        if (!route) throw new Error('transport failure for ' + fullPath + ': HTTP 404');
+        const rpcId = 'rpc-' + (++rpcSeq);
+        const req = new Request('http://dsh.internal' + fullPath, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ type: 'client-request', rpcId, method: endpoint, payload }),
+        });
+        const resp = await route.fetch(req);
+        if (!resp.ok) throw new Error('transport failure for ' + fullPath + ': HTTP ' + resp.status);
+        const env = await resp.json();
+        if (!env || env.type !== 'server-response' || env.rpcId !== rpcId || !env.result || typeof env.result !== 'object') {
+          throw new TypeError('invalid server-response envelope');
+        }
+        if (env.result.ok === true) {
+          return { ok: true, value: env.result.value };
+        }
+        const er = env.result.error;
+        if (!er || typeof er.code !== 'string' || typeof er.message !== 'string'
+          || !er.details || typeof er.details !== 'object' || Array.isArray(er.details)) {
+          throw new TypeError('invalid error envelope details');
+        }
+        return { ok: false, error: er };
+      },
+    };
+
+    const prevFetchDesktop = globalThis.fetch;
+    const prevLoc = globalThis.window.location;
+    globalThis.fetch = undefined;
+    globalThis.window.location = { protocol: 'file:', origin: 'null' };
+    mod.__test.resetBridgeSnapshot();
+    mod.__test.resetSwarmSnapshot();
+
+    try {
+      mount({
+        get: (n) => (n === 'connection' ? { rpc: strictElectronRpc } : undefined),
+        remote: {
+          settings: {
+            describe: async () => ({
+              ok: true,
+              value: {
+                namespaces: [{
+                  ns: 'research-dispatch',
+                  revision: 10,
+                  user: {},
+                  value: { ...FULL_VALUE, repoRoot: repo },
+                  schema: REAL_SCHEMA,
+                }],
+              },
+            }),
+            update: async () => ({ ok: true }),
+          },
+        },
+      });
+
+      let pDesktop = await settle(render());
+      ok(!!mod.__test.bridgeSnapshot() && mod.__test.bridgeSnapshot().version === '2.2.1',
+        'v2.2.1：Electron file:// 环境下无 HTTP fetch 时，自动走 connection.rpc 拉通执行者模型目录');
+
+      const toSwarmBtn = pDesktop.buttons.find((b) => textOf(b.children).includes('科研拓扑'));
+      toSwarmBtn.onClick();
+      pDesktop = await settle(render());
+      pDesktop = await settle(render());
+
+      hookCursor = 0;
+      const expandedDesktopSwarm = expandTree(pDesktop.tree);
+      const desktopNodes = findAll(expandedDesktopSwarm, (n) => n.type === 'g' && String(n.props.className || '').includes('rdp-gnode'));
+      const stuckLoading = pDesktop.texts.some((t) => t.includes('正在同步实时科研拓扑盘面'));
+      ok(!stuckLoading && desktopNodes.length >= 5 && pDesktop.texts.some((t) => t.includes('idea_01')),
+        'v2.2.1：Electron 桌面端（file:// + connection.rpc）秒级渲染 /swarm 拓扑星图，不再卡死于“正在同步实时科研拓扑盘面…”');
+
+      // 验证 connection.rpc 下的拍板动作：parseConnectionResponse 剥离顶层字段后仍从 value.snapshot 更新拓扑快照
+      const goViaRpc = await mod.__test.postDispatchAction({
+        kind: 'verdict',
+        repoRoot: repo,
+        topic: 'demo-topic',
+        ideaId: 'idea_01',
+        decision: 'go',
+        note: 'Electron RPC 拍板验收通过',
+      });
+      const goDisk = fs.readFileSync(path.join(repo, 'ideas', 'demo-topic', 'verdict-idea_01.md'), 'utf8');
+      const snapIdeas = (mod.__test.swarmSnapshot() && mod.__test.swarmSnapshot().ideas) || [];
+      ok(goViaRpc.ok === true
+        && goDisk.includes('决定: go')
+        && snapIdeas.some((it) => it.ideaId === 'idea_01' && it.verdict === 'go'),
+        'v2.2.1：Electron connection.rpc 拍板动作回传符合严格协议校验并实时刷新前端拓扑状态');
+
+      // 验证 connection.rpc 错误包格式（details 必为纯对象）与非 404 异常显式提示（绝不静默卡死）
+      let badRpcErr = '';
+      try {
+        await mod.__test.postDispatchAction({
+          kind: 'verdict',
+          repoRoot: repo,
+          topic: 'demo-topic',
+          ideaId: 'idea_01',
+          decision: 'invalid_choice',
+        });
+      } catch (e) {
+        badRpcErr = String((e && e.message) || e);
+      }
+      ok(badRpcErr.includes('go、revise 或 kill'),
+        'v2.2.1：connection.rpc 失败回包满足 error.details 纯对象校验且透出可读中文错误');
+
+      // 验证旧版托盘驻留进程（HTTP 404）与通道故障时，画布显式告警而不无限转圈
+      mod.__test.resetSwarmSnapshot();
+      mod.__test.setConnection({
+        rpc: {
+          call: async () => { throw new Error('transport failure for /api/research-dispatch/swarm-state: HTTP 404'); },
+        },
+      });
+      await mod.__test.fetchSwarmSnapshot({ repoRoot: repo });
+      pDesktop = await settle(render());
+      ok(mod.__test.swarmRouteMissing() === true
+        && pDesktop.texts.some((t) => t.includes('系统托盘'))
+        && !pDesktop.texts.some((t) => t.includes('正在同步实时科研拓扑盘面')),
+        'v2.2.1：旧后台未挂载路由返回 HTTP 404 时，立即提示从系统托盘退出重开而非永久卡加载');
+
+      mod.__test.resetSwarmSnapshot();
+      mod.__test.setConnection({
+        rpc: {
+          call: async () => { throw new Error('IPC channel disconnected'); },
+        },
+      });
+      await mod.__test.fetchSwarmSnapshot({ repoRoot: repo });
+      pDesktop = await settle(render());
+      ok(mod.__test.swarmLastError().includes('IPC channel disconnected')
+        && pDesktop.texts.some((t) => t.includes('实时拓扑同步未成功'))
+        && !pDesktop.texts.some((t) => t.includes('正在同步实时科研拓扑盘面')),
+        'v2.2.1：IPC 异常时显式展示错误原因与重试引导，绝不静默卡死');
+
+      // 验证 Electron Origin: null / file:// 回环放行与跨站阻断
+      ok(host.isLocalBridgeRequestAllowed({
+        headers: { host: '127.0.0.1:3080', origin: 'null' },
+        socket: { remoteAddress: '127.0.0.1' },
+      }) === true
+        && host.isLocalBridgeRequestAllowed({
+          headers: { host: 'localhost:3080', origin: 'file://' },
+          socket: { remoteAddress: '::1' },
+        }) === true
+        && host.isLocalBridgeRequestAllowed({
+          headers: { host: '127.0.0.1:3080', origin: 'https://evil.example' },
+          socket: { remoteAddress: '127.0.0.1' },
+        }) === false
+        && host.isLocalBridgeRequestAllowed({
+          headers: { host: '127.0.0.1:3080', origin: 'file://' },
+          socket: { remoteAddress: '192.168.1.99' },
+        }) === false,
+      'v2.2.1：回环鉴权放行本机 Electron Origin:null/file://，严格拦截外部站点与非本机来源');
+
+      if (typeof disposeConnScope === 'function') disposeConnScope();
+      ok(Object.keys(connRoutes).length === 0, 'v2.2.1：connection 作用域卸载时干净注销全部 RPC 路由');
+    } finally {
+      globalThis.fetch = prevFetchDesktop;
+      globalThis.window.location = prevLoc;
+      mod.__test.setConnection(null);
+      mod.__test.resetBridgeSnapshot();
+      mod.__test.resetSwarmSnapshot();
     }
   }
 

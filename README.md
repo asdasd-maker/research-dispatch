@@ -1,15 +1,15 @@
 # research-dispatch
 
-**Universal Pure-Node AI Research Workflow Engine (`v2.2.0`)**
+**Universal Pure-Node AI Research Workflow Engine (`v2.2.1`)**
 *Literature Scout (LaTeX/Markdown-First) → Baseline Repro Gate → Dual-Mode Divergence → Out-of-Repo Multi-Agent Blind Review & Ranked 5D Summary → Pre-Contract Novelty & Paired `2σ` Pilot Stats → Human Verdict → Frozen Experiment Contract.*
 
 普适纯 Node 科研流程引擎：把「文献调研成池（优先抓取 arXiv LaTeX/Markdown 免 PDF 乱序）→ 基线复现签字 → 双模式候选发散（默认 10 条，支持挂载死胡同记忆或纯空白零锚定模式）→ 仓外物理隔离的多 Agent 盲审与五维 `/25` 自动 Ranking 总表 → 单工单隔离前置查重与 ≤2h Pilot 配对统计探针 → 人类唯一裁决 → 实验与消融契约哈希冻结」做成一套**零外部脚本依赖、跨主流 AI 编程宿主开箱即用**的确定性流水线。
 
-> **English Overview**: `research-dispatch` v2.2.0 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity (`agy`)**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
+> **English Overview**: `research-dispatch` v2.2.1 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity (`agy`)**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
 
 ---
 
-## 核心特性（v2.2.0）
+## 核心特性（v2.2.1）
 
 - **四大 AI 阶段全流程独立编排（`scout` / `diverge` / `review` / `novelty`）**：
   - **S0 文献调研（`scout`）**：自动读取 `roles/scout.md`、注入已有文献去重清单、要求优先提取 arXiv LaTeX/HTML/Markdown 源码信息，自动切分多卡、逐张执行 `check-paper`（坏卡隔离至 `rejected/`），支持 `--pool` 一键刷新 `papers/cards/_pool.md`。
@@ -20,8 +20,8 @@
   - 原生支持 **`codex`（Codex CLI）**、**`claude`（Claude Code）**、**`dsh`（DeepSeek Harness）**、**`agy`（Antigravity CLI，`--output-format text --disable-slash-commands`）**、**`kimi`（Kimi Code，`--output-format text`）** 五大真实 CLI 工具（底层仍兼容编程式 `api` / `delivery` 座位）。
   - 毫秒级本地配置与模型目录扫描（零密钥值读取）：自动聚合 `~/.codex/{config.toml,models_cache.json,cc-switch-model-catalog.json}`、`~/.claude/settings.json`（含 `ANTHROPIC_*MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL` / `availableModels`）、`~/.dsh/{settings.yaml,storages/*catalog*.json}` 与 `cordis.patch.yml` 模型 ID、`~/.gemini/antigravity-cli/{settings.json,cache/models_cache.json}`（支持 `agy models` 异步实时刷新缓存）、`~/.kimi/config.toml`（顶层与 `[models.*]` 节）。
 - **仓外临时目录物理隔离（`os.tmpdir()`）**：全部外部 CLI 子进程默认在系统临时目录（项目 `.git` 树之外）启动，向上遍历父目录永远读不到项目根 `AGENTS.md` 或 `CLAUDE.md`。
-- **DSH 旗舰 Bento 编排工作台 + Antigravity `/swarm` 级实时科研拓扑星图（v2.2.0）**：
-  - **双栖入口**：既可在 DSH 左栏「科研派工」设置页顶部分段切换 `[ 阵容编排 | 科研拓扑 ]`，也可在任意会话右上角点击「科研拓扑」动态胶囊一键展开全屏 `conversation.view` 拓扑画布。
+- **DSH 旗舰 Bento 编排工作台 + Antigravity `/swarm` 级实时科研拓扑星图（v2.2.1）**：
+  - **双栖入口**：既可在 DSH 左栏「科研派工」设置页顶部分段切换 `[ 阵容编排 | 科研拓扑 ]`，也可在任意会话右上角点击「科研拓扑」动态胶囊一键展开全屏 `conversation.view` 拓扑画布（原生通过 `@deepseek-ai/dsh-client-connection` RPC 同时驱动 Electron 桌面端与 Web 端）。
   - **S0→S6 双层联动 `/swarm` 拓扑星图**：顶部八阶段进度轨联动下方四列三次贝塞尔平滑扇出图（`推式输入源 → 主控派工与门禁 → 独立沙箱 Workers → 榜单与人类唯一裁决`），实时追踪 Worker 沙箱 PID 活性、耗时脉冲、推式 `sha` 指纹、五维打分条与落盘原文预览。
   - **人类唯一裁决台与智能工作区识别**：右侧检查器内置人工 `GO / REVISE / KILL` 原子签写台（`KILL` 支持同步追加课题 `dead-ends.md`），严守「禁止模型互相收敛代替拍板」硬约束；自动扫描 DSH 工作区列表并拉黑 `.dsh/profiles/*` 内部配置目录，双向回显项目 `dispatch/seats.json` 默认阵容且点击保存自动写穿。
 
@@ -34,7 +34,7 @@
 npm i -D git+https://github.com/asdasd-maker/research-dispatch.git
 
 # 方式 B：从 GitHub Release 离线归档安装
-npm i -D ./research-dispatch-2.2.0.tgz
+npm i -D ./research-dispatch-2.2.1.tgz
 
 # 方式 C：克隆仓库后全局 link（多课题共用）
 git clone https://github.com/asdasd-maker/research-dispatch.git

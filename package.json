@@ -1,7 +1,7 @@
 {
   "name": "research-dispatch",
-  "version": "2.2.0",
-  "description": "Universal pure-Node AI research workflow engine (v2.2.0): Bento stage studio + Antigravity /swarm live topology graph, 4-stage multi-agent orchestration (literature scout, blank-slate or dead-end-aware diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), live CLI model discovery, paired pilot stats, and frozen contracts across Antigravity (agy), Claude Code, Codex, Cursor, Kimi Code, and DeepSeek Harness.",
+  "version": "2.2.1",
+  "description": "Universal pure-Node AI research workflow engine (v2.2.1): Bento stage studio + Antigravity /swarm live topology graph over native DSH connection RPC, 4-stage multi-agent orchestration (literature scout, blank-slate or dead-end-aware diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), live CLI model discovery, paired pilot stats, and frozen contracts across Antigravity (agy), Claude Code, Codex, Cursor, Kimi Code, and DeepSeek Harness.",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -72,6 +72,8 @@
     "client": {
       "platform": "web",
       "inject": [
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-conversation",

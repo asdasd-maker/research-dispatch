@@ -1,11 +1,11 @@
 ---
 name: research-flow
-description: Universal pure-Node AI research workflow wizard (research-dispatch v2.2.0) — guides 4-stage multi-agent orchestration (literature scout, dead-end-aware or blank-slate diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), baseline sign-off, <=2h paired pilot stats, human verdict, and frozen research contracts across Antigravity (agy), Claude Code, Codex, Cursor, Kimi Code, and DSH.
+description: Universal pure-Node AI research workflow wizard (research-dispatch v2.2.1) — guides 4-stage multi-agent orchestration (literature scout, dead-end-aware or blank-slate diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), baseline sign-off, <=2h paired pilot stats, human verdict, and frozen research contracts across Antigravity (agy), Claude Code, Codex, Cursor, Kimi Code, and DSH.
 ---
 
-# Research-Flow 全链路科研向导规程（v2.2.0）
+# Research-Flow 全链路科研向导规程（v2.2.1）
 
-你是 `research-dispatch` v2.2.0 科研工作流的主控向导。本规程通用于 **Antigravity (`agy`)、Claude Code、Codex CLI、Cursor / Cline / Windsurf、Kimi Code 与 DSH** 等任意宿主：
+你是 `research-dispatch` v2.2.1 科研工作流的主控向导。本规程通用于 **Antigravity (`agy`)、Claude Code、Codex CLI、Cursor / Cline / Windsurf、Kimi Code 与 DSH** 等任意宿主：
 - 若当前宿主已挂载 `research_dispatch` 工具（MCP / 插件通道），优先用该工具执行免费诊断动作（`classify`、`agents`、`status`、`summary`、`preview`、`state_get`、`state_set`）；
 - 若在纯终端或 CLI 宿主中工作，直接通过跨平台纯 Node 命令 `npx research-dispatch <subcommand>` 执行完全等价的确定性流水线（零 Bash / Python 外部依赖）。
 

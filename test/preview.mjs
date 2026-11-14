@@ -1,4 +1,4 @@
-// 设置页与 /swarm 科研拓扑静态预览生成器（v2.2.0）：把真实组件树序列化成静态 HTML，复用同一份 CSS 渲染。
+// 设置页与 /swarm 科研拓扑静态预览生成器（v2.2.1）：把真实组件树序列化成静态 HTML，复用同一份 CSS 渲染。
 //
 //   node plugin/research-dispatch/test/preview.mjs   → plugin/research-dispatch/test/preview.html
 //
@@ -41,7 +41,7 @@ mod.__test.setLiveGroups([
 ]);
 
 mod.__test.setBridgeSnapshot({
-  version: '2.2.0',
+  version: '2.2.1',
   catalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5|claude-opus-4-1;dsh:qoder/deepseek-v4-pro;agy:gemini-4-carbon-medium|gemini-4-carbon-high|claude-opus-5-5-high;kimi:kimi-k2-thinking',
   status: 'codex:1;claude:1;dsh:1;agy:1;kimi:1',
   defaultRepoRoot: '/workspace/my-research',
@@ -383,7 +383,7 @@ const DARK = [
 
 const css = mod.__test.CSS();
 const html = '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
-  + '<title>科研派工 v2.2.0 · Bento 编排工作台 &amp; /swarm 科研拓扑星图预览</title><style>'
+  + '<title>科研派工 v2.2.1 · Bento 编排工作台 &amp; /swarm 科研拓扑星图预览</title><style>'
   + '*{box-sizing:border-box}body{margin:0;padding:28px;background:#e9e7df;font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif}'
   + '.wrap{display:grid;grid-template-columns:1fr 1fr;gap:24px;max-width:1820px;margin:0 auto}'
   + '.wrap-single{max-width:1820px;margin:0 auto 24px}'
