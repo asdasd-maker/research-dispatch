@@ -1,4 +1,4 @@
-// 设置页与 /swarm 科研拓扑静态预览生成器（v2.2.1）：把真实组件树序列化成静态 HTML，复用同一份 CSS 渲染。
+// 设置页与 /swarm 科研拓扑静态预览生成器（v2.3.0）：把真实组件树序列化成静态 HTML，复用同一份 CSS 渲染。
 //
 //   node plugin/research-dispatch/test/preview.mjs   → plugin/research-dispatch/test/preview.html
 //
@@ -41,7 +41,7 @@ mod.__test.setLiveGroups([
 ]);
 
 mod.__test.setBridgeSnapshot({
-  version: '2.2.1',
+  version: '2.3.0',
   catalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5|claude-opus-4-1;dsh:qoder/deepseek-v4-pro;agy:gemini-4-carbon-medium|gemini-4-carbon-high|claude-opus-5-5-high;kimi:kimi-k2-thinking',
   status: 'codex:1;claude:1;dsh:1;agy:1;kimi:1',
   defaultRepoRoot: '/workspace/my-research',
@@ -130,6 +130,7 @@ function mount(mode) {
   mod.apply({
     slots: { inject: (n, fn) => { registered = { slot: n, ...fn() }; }, register: (def, comp) => ({ def, comp }) },
     get: () => undefined,
+    uiWorkspace: { pickDirectory: async () => null },
     remote: {
       settings: {
         describe: mode === 'nogw'
@@ -272,6 +273,7 @@ const SVG_ATTR_MAP = {
   stroke: 'stroke',
   strokeWidth: 'stroke-width',
   strokeLinecap: 'stroke-linecap',
+  strokeLinejoin: 'stroke-linejoin',
   d: 'd',
   cx: 'cx',
   cy: 'cy',
@@ -286,6 +288,16 @@ const SVG_ATTR_MAP = {
   textAnchor: 'text-anchor',
   fontSize: 'font-size',
   fontWeight: 'font-weight',
+  filter: 'filter',
+  id: 'id',
+  dx: 'dx',
+  dy: 'dy',
+  stdDeviation: 'stdDeviation',
+  floodColor: 'flood-color',
+  floodOpacity: 'flood-opacity',
+  dur: 'dur',
+  repeatCount: 'repeatCount',
+  path: 'path',
 };
 function serStyle(st) {
   if (!st || typeof st !== 'object') return '';
@@ -309,7 +321,7 @@ function attr(k, v, tag) {
     return s ? ' style="' + esc(s) + '"' : '';
   }
   if (SVG_ATTR_MAP[k]) return ' ' + SVG_ATTR_MAP[k] + '="' + esc(v) + '"';
-  if (['value', 'placeholder', 'type', 'min', 'max', 'title', 'role', 'aria-label', 'aria-hidden', 'aria-selected', 'aria-haspopup', 'aria-expanded'].includes(k)) {
+  if (k.startsWith('data-') || ['value', 'placeholder', 'type', 'min', 'max', 'title', 'role', 'aria-label', 'aria-hidden', 'aria-selected', 'aria-checked', 'aria-haspopup', 'aria-expanded'].includes(k)) {
     return ' ' + k + '="' + esc(v) + '"';
   }
   return '';
@@ -365,25 +377,25 @@ const demoHtml = ser(demoPicker(''));
 const demoHtmlFiltered = ser(demoPicker('qwen-custom-preview'));
 
 const LIGHT = [
-  '--dsw-alias-bg-base:#fcfcfb;--dsw-alias-bg-layer-1:#ffffff;--dsw-alias-bg-layer-2:#f4f3ee;--dsw-alias-bg-layer-3:#f9f8f5',
-  '--dsw-alias-border-l1:#e7e5dc;--dsw-alias-border-l2:#dedcd2;--dsw-alias-border-l3:#cecbc0',
-  '--dsw-alias-label-primary:#141413;--dsw-alias-label-secondary:#5f5e57;--dsw-alias-label-tertiary:#8a887f',
-  '--dsw-alias-brand-primary:#4f46e5;--dsw-alias-button-primary-fill:#4f46e5;--dsw-alias-button-primary-hover:#4338ca;--dsw-alias-button-primary-text:#ffffff',
-  '--dsw-alias-state-danger-fg:#dc2626;--dsw-alias-state-success-fg:#059669',
+  '--dsw-alias-bg-base:#faf9f5;--dsw-alias-bg-layer-1:#f5f4ed;--dsw-alias-bg-layer-2:#ecebe3;--dsw-alias-bg-layer-3:#e3e1d6',
+  '--dsw-alias-border-l1:#e5e3d8;--dsw-alias-border-l2:#dad8cc;--dsw-alias-border-l3:#c7c4b6',
+  '--dsw-alias-label-primary:#141413;--dsw-alias-label-secondary:#5e5d59;--dsw-alias-label-tertiary:#87867f',
+  '--dsw-alias-brand-primary:#c96442;--dsw-alias-button-primary-fill:#c96442;--dsw-alias-button-primary-hover:#b55737;--dsw-alias-label-primary-foreground:#ffffff',
+  '--dsw-alias-state-error-primary:#dc2626;--dsw-alias-state-success-primary:#059669;--dsw-alias-state-warn-primary:#d97706;--dsw-alias-state-warn-label:#b45309',
   '--dsw-font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif',
 ].join(';');
 const DARK = [
-  '--dsw-alias-bg-base:#0f1117;--dsw-alias-bg-layer-1:#161922;--dsw-alias-bg-layer-2:#1e2230;--dsw-alias-bg-layer-3:#262b3d',
-  '--dsw-alias-border-l1:rgba(255,255,255,.08);--dsw-alias-border-l2:rgba(255,255,255,.14);--dsw-alias-border-l3:rgba(255,255,255,.26)',
-  '--dsw-alias-label-primary:#f8fafc;--dsw-alias-label-secondary:#cbd5e1;--dsw-alias-label-tertiary:#94a3b8',
-  '--dsw-alias-brand-primary:#6366f1;--dsw-alias-button-primary-fill:#6366f1;--dsw-alias-button-primary-hover:#818cf8;--dsw-alias-button-primary-text:#ffffff',
-  '--dsw-alias-state-danger-fg:#f87171;--dsw-alias-state-success-fg:#34d399',
+  '--dsw-alias-bg-base:#1f1e1b;--dsw-alias-bg-layer-1:#262624;--dsw-alias-bg-layer-2:#30302e;--dsw-alias-bg-layer-3:#3a3936',
+  '--dsw-alias-border-l1:rgba(255,255,255,.08);--dsw-alias-border-l2:rgba(255,255,255,.13);--dsw-alias-border-l3:rgba(255,255,255,.24)',
+  '--dsw-alias-label-primary:#faf9f5;--dsw-alias-label-secondary:#c2c0b6;--dsw-alias-label-tertiary:#8e8d85',
+  '--dsw-alias-brand-primary:#d97757;--dsw-alias-button-primary-fill:#d97757;--dsw-alias-button-primary-hover:#e2886b;--dsw-alias-label-primary-foreground:#ffffff',
+  '--dsw-alias-state-error-primary:#f87171;--dsw-alias-state-success-primary:#34d399;--dsw-alias-state-warn-primary:#fbbf24;--dsw-alias-state-warn-label:#fbbf24',
   '--dsw-font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif',
 ].join(';');
 
 const css = mod.__test.CSS();
 const html = '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
-  + '<title>科研派工 v2.2.1 · Bento 编排工作台 &amp; /swarm 科研拓扑星图预览</title><style>'
+  + '<title>科研派工 v2.3.0 · dsh-claude-style 极简编排工作台 &amp; 可平移缩放 /swarm 拓扑星图预览</title><style>'
   + '*{box-sizing:border-box}body{margin:0;padding:28px;background:#e9e7df;font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif}'
   + '.wrap{display:grid;grid-template-columns:1fr 1fr;gap:24px;max-width:1820px;margin:0 auto}'
   + '.wrap-single{max-width:1820px;margin:0 auto 24px}'

@@ -1,4 +1,4 @@
-// 设置页与宿主层离线自检（v2.1.2）：无浏览器、无真 React、无网络。
+// 设置页与宿主层离线自检（v2.3.0）：无浏览器、无真 React、无网络。
 //   node plugin/research-dispatch/test/client.selftest.mjs
 //
 // 覆盖契约：
@@ -238,7 +238,7 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
   ok(openRows.length === 4 && txt(openRows[0]).includes('默认（使用该工具自身默认模型）'),
     '未输入过滤词时首项常驻「默认（使用该工具自身默认模型）」（1 默认 + 3 预设 = 4 行）');
   const selRow = openRows.find((x) => x.props['aria-selected'] === 'true');
-  ok(!!selRow && txt(selRow) === 'Auto✓', '当前选中模型行带勾选标记');
+  ok(!!selRow && txt(byClass(selRow, /rdp-menu-name/)[0]) === 'Auto' && byClass(selRow, /rdp-menu-tick/).length === 1, '当前选中模型行带矢量勾选标记');
 
   // 点击首项常驻默认行 → 一键切回 ""（恢复该工具自身默认模型）
   openRows[0].props.onClick();
@@ -478,35 +478,62 @@ const readyApi = {
   ok(page.texts.filter((t) => t === '高级项').length === 0, '无未知字段时不渲染「高级项」');
   ok(!/undefined/.test(page.texts.join(' ')), '无 undefined 泄漏');
 
-  // 所有下拉框均不含 subagent、api 或旧版 gemini（默认无旧残留时），且带友好工具标签与未安装提示
-  const anySubagent = page.selects.some((p) => optsOf(p).some((o) => o.value === 'subagent'));
-  const anyApi = page.selects.some((p) => optsOf(p).some((o) => o.value === 'api'));
-  const anyLegacyGemini = page.selects.some((p) => optsOf(p).some((o) => o.value === 'gemini'));
-  ok(!anySubagent && !anyApi && !anyLegacyGemini, '所有下拉框默认均不含 api、subagent 与旧版 gemini');
-  const scoutSelect = page.selects[0];
-  const scoutLabels = optsOf(scoutSelect).map((o) => String([].concat(o.children || []).join('')));
+  // v2.3.0：零原生 <select>，四阶段工具选择全部走定制 ExecPicker（不含 subagent、api 或旧版 gemini）
+  ok(page.selects.length === 0, 'v2.3.0：页面彻底零原生 <select> 元素');
+  const execBtnsOf = (pg) => pg.buttons.filter((b) => String(b.className || '').includes('rdp-exec-btn'));
+  const scoutExecBtn = execBtnsOf(page)[0];
+  ok(!!scoutExecBtn, '文献调研渲染定制 ExecPicker 触发按钮');
+  scoutExecBtn.onClick();
+  page = render();
+  const openMenuOpts = page.buttons.filter((b) => b.role === 'option');
+  const openValues = openMenuOpts.map((o) => o['data-exec-val']);
+  const scoutLabels = openMenuOpts.map((o) => {
+    const chunks = [];
+    (function walkTxt(x) {
+      if (typeof x === 'string' || typeof x === 'number') chunks.push(String(x));
+      else if (Array.isArray(x)) x.forEach(walkTxt);
+      else if (x && x.props) walkTxt(x.props.children);
+    })(o.children);
+    return chunks.join('');
+  });
+  ok(!openValues.includes('subagent') && !openValues.includes('api') && !openValues.includes('gemini'),
+    '所有定制下拉框默认均不含 api、subagent 与旧版 gemini');
   ok(scoutLabels.some((l) => l.includes('codex · Codex CLI'))
     && scoutLabels.some((l) => l.includes('kimi · Kimi Code'))
     && scoutLabels.some((l) => l.includes('agy · Antigravity（未检测到命令）')),
-    '下拉框展示 agy · Antigravity 等友好名称，并对 executorStatus=0 的工具柔和标注「（未检测到命令）」');
+    '定制下拉框展示 agy · Antigravity 等友好名称，并对 executorStatus=0 的工具柔和标注「（未检测到命令）」');
 
-  // 工作流项目输入框 + 发散单轮默认条数 + 死胡同过滤开关交互并保存
+  // Escape 关闭定制工具下拉菜单，重新打开并选中 kimi
+  execBtnsOf(page)[0].onKeyDown({ key: 'Escape', preventDefault() {} });
+  page = render();
+  ok(page.buttons.filter((b) => b.role === 'option').length === 0, '按 Escape 收起定制工具下拉菜单');
+
+  // 工作流项目输入框 + 发散单轮默认条数 + 死胡同过滤 Switch 拨杆交互并保存
   const pathInput = page.inputs.find((p) => String(p.className || '').includes('rdp-in-path'));
   const numInput = page.inputs.find((p) => String(p.className || '').includes('rdp-in-num'));
-  const deadEndsSelect = page.selects.find((p) => String(p.className || '').includes('rdp-in-mode'));
+  const deadEndsSwitch = page.buttons.find((b) => b.role === 'switch');
   ok(!!pathInput && pathInput.value === '/workspace/demo-project', '工作流项目展示 repoRoot 输入框');
   ok(!!numInput && numInput.value === '10' && numInput.max === 50,
     '想法发散内联展示单轮默认条数（空串回退展示 10，上限 max=50）');
-  ok(!!deadEndsSelect && deadEndsSelect.value === 'true', '想法发散内联展示历史死胡同过滤选择（空串回退展示 true）');
+  ok(!!deadEndsSwitch && deadEndsSwitch['aria-checked'] === 'true',
+    '想法发散内联展示历史死胡同过滤无障碍 Switch（空串回退展示开启态 true）');
 
   pathInput.onChange({ target: { value: '/workspace/new-topic' } });
-  scoutSelect.onChange({ target: { value: 'kimi' } });
   numInput.onChange({ target: { value: '45' } });
-  deadEndsSelect.onChange({ target: { value: 'false' } });
+  deadEndsSwitch.onClick(); // true -> false
   let editedPage = render();
+
+  // 设置文献调研为 kimi
+  execBtnsOf(editedPage)[0].onClick();
+  editedPage = render();
+  editedPage.buttons.find((b) => b.role === 'option' && b['data-exec-val'] === 'kimi').onClick();
+  editedPage = render();
+
   // 同时设置前置查重为 agy
-  const noveltySelect = editedPage.selects[editedPage.selects.length - 1];
-  noveltySelect.onChange({ target: { value: 'agy' } });
+  const noveltyExecBtns = execBtnsOf(editedPage);
+  noveltyExecBtns[noveltyExecBtns.length - 1].onClick();
+  editedPage = render();
+  editedPage.buttons.find((b) => b.role === 'option' && b['data-exec-val'] === 'agy').onClick();
   editedPage = render();
 
   // 加一票 codex
@@ -527,12 +554,15 @@ const readyApi = {
     && savedPatches[0].reviewVotes === 'codex:',
     '点击保存完整提交五分区改动（支持 agy 座位与 31–50 范围内条数如 45）');
 
-  // 超上限 >50 自动钳制到 50，且在默认空串下显式保存 10/true 仍可写穿提交
-  const pClamp = render();
+  // 超上限 >50 自动钳制到 50，且在默认空串下显式切换 Switch 回 true 仍可写穿提交
+  let pClamp = render();
   const numClamp = pClamp.inputs.find((p) => String(p.className || '').includes('rdp-in-num'));
-  const deadClamp = pClamp.selects.find((p) => String(p.className || '').includes('rdp-in-mode'));
+  let deadSwitchClamp = pClamp.buttons.find((b) => b.role === 'switch');
+  // 当前 FULL_VALUE.divergeUseDeadEnds 仍为空串（展示 true），连按两次 true->false->true 使 draft 显式置为 'true'
+  deadSwitchClamp.onClick();
+  pClamp = render();
+  pClamp.buttons.find((b) => b.role === 'switch').onClick();
   numClamp.onChange({ target: { value: '99' } });
-  deadClamp.onChange({ target: { value: 'true' } });
   const pClamp2 = render();
   const saveClamp = pClamp2.buttons.find((b) => String([].concat(b.children || []).join('')) === '保存');
   savedPatches = [];
@@ -552,9 +582,22 @@ const readyApi = {
     reviewVotes: 'api:deepseek-chat,kimi:kimi-k2',
   });
   mount({ remote: { settings: { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 8, user: {}, value: legacyApiVal, schema: REAL_SCHEMA }] } }), update: async () => ({ ok: true, value: {} }) } } });
-  const pApi = await settle(render());
-  const scoutOpts = optsOf(pApi.selects[0]).map((o) => ({ value: o.value, label: String([].concat(o.children || []).join('')) }));
-  const divergeOpts = optsOf(pApi.selects[1]).map((o) => o.value);
+  let pApi = await settle(render());
+  const readOpenOpts = () => pApi.buttons.filter((b) => b.role === 'option').map((o) => {
+    const chunks = [];
+    (function walkTxt(x) {
+      if (typeof x === 'string' || typeof x === 'number') chunks.push(String(x));
+      else if (Array.isArray(x)) x.forEach(walkTxt);
+      else if (x && x.props) walkTxt(x.props.children);
+    })(o.children);
+    return { value: o['data-exec-val'], label: chunks.join('') };
+  });
+  pApi.buttons.filter((b) => String(b.className || '').includes('rdp-exec-btn'))[0].onClick();
+  pApi = render();
+  const scoutOpts = readOpenOpts();
+  pApi.buttons.filter((b) => String(b.className || '').includes('rdp-exec-btn'))[1].onClick();
+  pApi = render();
+  const divergeOpts = readOpenOpts().map((o) => o.value);
   ok(!scoutOpts.some((o) => o.value === 'api') && divergeOpts.includes('api'),
     '历史配置残留 api 时，仅在当前值为 api 的下拉框显示兼容项供切走，其余下拉框绝不出现 api');
   ok(scoutOpts.some((o) => o.value === 'gemini' && o.label.includes('建议切换至 agy'))
@@ -885,8 +928,8 @@ const readyApi = {
       headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
       socket: { remoteAddress: '127.0.0.1' },
     }));
-    ok(!!liveSnap && liveSnap.version === '2.2.1' && liveSnap.catalog.includes('agy:'),
-      'v2.2.1：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
+    ok(!!liveSnap && liveSnap.version === '2.3.0' && liveSnap.catalog.includes('agy:'),
+      'v2.3.0：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
 
     const catFromBridge = mod.__test.panelCatalog({ executorCatalog: '' }, { get: () => undefined }, null);
     ok(catFromBridge.some((c) => c.exec === 'agy' && c.models.length >= 6),
@@ -1249,8 +1292,8 @@ const readyApi = {
       });
 
       let pDesktop = await settle(render());
-      ok(!!mod.__test.bridgeSnapshot() && mod.__test.bridgeSnapshot().version === '2.2.1',
-        'v2.2.1：Electron file:// 环境下无 HTTP fetch 时，自动走 connection.rpc 拉通执行者模型目录');
+      ok(!!mod.__test.bridgeSnapshot() && mod.__test.bridgeSnapshot().version === '2.3.0',
+        'v2.3.0：Electron file:// 环境下无 HTTP fetch 时，自动走 connection.rpc 拉通执行者模型目录');
 
       const toSwarmBtn = pDesktop.buttons.find((b) => textOf(b.children).includes('科研拓扑'));
       toSwarmBtn.onClick();
@@ -1349,6 +1392,330 @@ const readyApi = {
       globalThis.window.location = prevLoc;
       mod.__test.setConnection(null);
       mod.__test.resetBridgeSnapshot();
+      mod.__test.resetSwarmSnapshot();
+    }
+
+    // 5) v2.3.0 精修契约：① 视觉反廉价静态审计 ② 无 Prim 离线 SVG 兜底 + 原生目录选择 ③ 注入模拟 Prim 原语契约 ④ /swarm 画布缩放平移
+    {
+      const expand23 = (n) => {
+        if (n === null || n === undefined || typeof n !== 'object') return n;
+        if (Array.isArray(n)) return n.map(expand23);
+        if (typeof n.type === 'function') return expand23(n.type(n.props || {}));
+        return { ...n, props: { ...(n.props || {}), children: expand23((n.props || {}).children) } };
+      };
+      const find23 = (rootNode, pred) => {
+        const acc = [];
+        (function scan(x) {
+          if (x === null || x === undefined || typeof x !== 'object') return;
+          if (Array.isArray(x)) { x.forEach(scan); return; }
+          if (typeof x.type === 'function') { scan(x.type(x.props || {})); return; }
+          if (pred(x)) acc.push(x);
+          if (x.props) scan(x.props.children);
+        })(rootNode);
+        return acc;
+      };
+      const txt23 = (rootNode) => {
+        const chunks = [];
+        (function scan(x) {
+          if (x === null || x === undefined || x === false || x === true) return;
+          if (typeof x === 'string' || typeof x === 'number') { chunks.push(String(x)); return; }
+          if (Array.isArray(x)) { x.forEach(scan); return; }
+          if (typeof x.type === 'function') { scan(x.type(x.props || {})); return; }
+          if (x && x.props) scan(x.props.children);
+        })(rootNode);
+        return chunks.join('');
+      };
+
+      // ① 静态反廉价与版本兼容审计
+      const cssStr = mod.__test.CSS();
+      const rawClientCode = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
+      const codeNoComments = rawClientCode.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      ok(!/linear-gradient/i.test(cssStr) && /tabular-nums/.test(cssStr),
+        'v2.3.0：CSS 零 linear-gradient 刺眼渐变，全量数值启用 tabular-nums 等宽排版');
+      ok(!/--dsw-alias-(?:state-warning-|button-primary-text)/.test(rawClientCode)
+        && /--dsw-alias-state-warn-primary/.test(cssStr)
+        && /--dsw-alias-label-primary-foreground/.test(cssStr),
+        'v2.3.0：CSS 全量对齐 DSH 官方真实令牌（--dsw-alias-state-warn-primary / --dsw-alias-label-primary-foreground），零幻觉变量名');
+      ok(!/[▾▸✓✕✦●↻👤①②③④]/.test(codeNoComments),
+        'v2.3.0：client.js 运行代码彻底清零 Unicode 伪图标字符（全部升级为矢量 SVG / 官方 Icon*）');
+      mod.__test.setBridgeSnapshot({ version: '2.2.0', catalog: 'agy:m1' });
+      const v220Outdated = mod.__test.isBackendOutdated({ schema: REAL_SCHEMA, value: {} });
+      mod.__test.setBridgeSnapshot({ version: '2.2.1', catalog: 'agy:m1' });
+      const v221Outdated = mod.__test.isBackendOutdated({ schema: REAL_SCHEMA, value: {} });
+      mod.__test.setBridgeSnapshot({ version: '2.3.0', catalog: 'agy:m1' });
+      const v230Outdated = mod.__test.isBackendOutdated({ schema: REAL_SCHEMA, value: {} });
+      mod.__test.resetBridgeSnapshot();
+      ok(v220Outdated === true && v221Outdated === false && v230Outdated === false,
+        'v2.3.0：isBackendOutdated 拦截无 RPC 桥的 ≤2.2.0 旧后台，放行 2.2.1 与 2.3.0');
+
+      // ② 无 Prim 离线沙箱降级渲染 + 原生目录选择（null 取消静默无错 + 选中路径回填）+ 页脚安静/高亮切换
+      ok(mod.__test.getPrimitives() === null, 'v2.3.0：离线沙箱默认安全降级 Prim === null 不抛异常');
+      let dirPickCalls = 0;
+      let nextPickedDir = null;
+      hookState.length = 0;
+      let regDir = null;
+      mod.apply({
+        slots: { inject: (n, fn) => { regDir = { slot: n, ...fn() }; }, register: (def, comp) => ({ def, comp }) },
+        get: () => undefined,
+        uiWorkspace: {
+          pickDirectory: async () => { dirPickCalls += 1; return nextPickedDir; },
+        },
+        remote: { settings: readyApi },
+      });
+      const renderExpanded23 = () => {
+        hookCursor = 0;
+        pendingEffects = [];
+        return expand23(registered.comp({}));
+      };
+      registered = regDir;
+      let pDir = await settle(render());
+      const expClean = renderExpanded23();
+      const footClean = find23(expClean, (n) => n.type === 'div' && String(n.props.className || '').includes('rdp-foot'))[0];
+      const svgFallbackIcons = find23(expClean, (n) => n.type === 'svg' && String(n.props.className || '').includes('rdp-svg-ico'));
+      ok(!!footClean && String(footClean.props.className).includes('is-quiet') && svgFallbackIcons.length >= 6,
+        'v2.3.0：无改动时底部操作栏保持 is-quiet 安静态，且离线沙箱正常渲染 1.5px 描边矢量 SVG 图标');
+
+      const browseBtn = pDir.buttons.find((b) => String(b.className || '').includes('rdp-browse-btn'));
+      ok(!!browseBtn && txt23(browseBtn.children).includes('浏览'),
+        'v2.3.0：检测到 uiWorkspace.pickDirectory 服务时在项目路径旁展示原生「浏览…」按钮');
+
+      // 用户取消选择（返回 null）→ 静默保持原路径且不置 dirty
+      nextPickedDir = null;
+      browseBtn.onClick();
+      await tick(); await tick();
+      pDir = render();
+      ok(dirPickCalls === 1
+        && pDir.inputs.find((p) => String(p.className || '').includes('rdp-in-path')).value === '/workspace/demo-project'
+        && pDir.buttons.find((b) => txt23(b.children) === '保存').disabled === true,
+        'v2.3.0：原生文件夹选择框用户取消（返回 null）时静默不报错、不污染草稿');
+
+      // 用户选中新目录 → 自动更新路径草稿并抬升底部保存栏为 is-elevated
+      nextPickedDir = '/workspace/picked-via-native-dialog';
+      pDir.buttons.find((b) => String(b.className || '').includes('rdp-browse-btn')).onClick();
+      await tick(); await tick();
+      pDir = render();
+      const footDirty = find23(renderExpanded23(), (n) => n.type === 'div' && String(n.props.className || '').includes('rdp-foot'))[0];
+      ok(dirPickCalls === 2
+        && pDir.inputs.find((p) => String(p.className || '').includes('rdp-in-path')).value === '/workspace/picked-via-native-dialog'
+        && !!footDirty && String(footDirty.props.className).includes('is-elevated'),
+        'v2.3.0：原生文件夹选择返回路径后即时写入输入框，并将底部保存栏切换至 is-elevated 高亮态');
+
+      // ③ 注入模拟 @deepseek-ai/dsh-client-ui-primitives 核验原生组件调用与精确 Props 契约
+      const primCalls = { Button: 0, Switch: [], Tag: 0, StateDot: 0, Menu: [], Icons: [] };
+      const makeIconMock = (iconName) => (p) => {
+        const definedKeys = Object.keys(p || {}).filter((k) => p[k] !== undefined);
+        primCalls.Icons.push({ name: iconName, keys: definedKeys });
+        return fakeReact.createElement('svg', { 'data-prim-icon': iconName, width: p && p.size });
+      };
+      const mockPrim = {
+        Button: (p) => {
+          primCalls.Button += 1;
+          return fakeReact.createElement('button', {
+            type: 'button',
+            'data-prim-btn': p.variant,
+            disabled: p.disabled,
+            className: p.className,
+            onClick: p.onClick,
+          }, p.icon, p.children);
+        },
+        Switch: (p) => {
+          primCalls.Switch.push(p);
+          return fakeReact.createElement('button', {
+            type: 'button',
+            role: 'switch',
+            'data-prim-switch': '1',
+            'aria-checked': String(Boolean(p.checked)),
+            'aria-label': p.label,
+            disabled: p.disabled,
+            onClick: () => p.onChange(!p.checked),
+          });
+        },
+        Tag: (p) => {
+          primCalls.Tag += 1;
+          return fakeReact.createElement('span', { 'data-prim-tag': p.tone }, p.children);
+        },
+        StateDot: (p) => {
+          primCalls.StateDot += 1;
+          return fakeReact.createElement('span', { 'data-prim-dot': p.state });
+        },
+        Menu: (p) => {
+          primCalls.Menu.push(p);
+          return fakeReact.createElement('span', { 'data-prim-menu': p.open ? 'open' : 'closed' },
+            p.anchor,
+            p.open ? p.items.map((it) => fakeReact.createElement('button', {
+              type: 'button',
+              key: it.id,
+              'data-prim-item': it.id,
+              onClick: () => p.onSelect(it.id),
+            }, it.label)) : null);
+        },
+        IconFolderOpenOutline16: makeIconMock('IconFolderOpenOutline16'),
+        IconRefreshOutline14: makeIconMock('IconRefreshOutline14'),
+        IconChevronDownOutline14: makeIconMock('IconChevronDownOutline14'),
+        IconCheckOutline14: makeIconMock('IconCheckOutline14'),
+        IconPlusOutline16: makeIconMock('IconPlusOutline16'),
+        IconBranchOutline16: makeIconMock('IconBranchOutline16'),
+      };
+
+      const modWithPrim = reg.factory((id) => {
+        if (id === 'react') return fakeReact;
+        if (id === '@deepseek-ai/dsh-client-ui-primitives') return mockPrim;
+        throw new Error('unexpected require: ' + id);
+      });
+      ok(modWithPrim.__test.getPrimitives() === mockPrim,
+        'v2.3.0：宿主持有 @deepseek-ai/dsh-client-ui-primitives 时自动启用官方原语模块');
+
+      hookState.length = 0;
+      let regPrimSlot = null;
+      modWithPrim.apply({
+        slots: { inject: (n, fn) => { regPrimSlot = { slot: n, ...fn() }; }, register: (def, comp) => ({ def, comp }) },
+        get: () => undefined,
+        remote: { settings: readyApi },
+      });
+      registered = regPrimSlot;
+      let pPrim = await settle(render());
+      ok(primCalls.Button > 0
+        && primCalls.StateDot > 0
+        && primCalls.Switch.length >= 1
+        && primCalls.Menu.length >= 3
+        && primCalls.Menu.every((m) => m.portal === true && m.selectedId === '__default__')
+        && primCalls.Icons.length > 0
+        && primCalls.Icons.every((ic) => ic.keys.every((k) => k === 'size' || k === 'className')),
+        'v2.3.0：Prim 原语模式下正确调用 Button / Switch / StateDot / Menu(portal:true) / Icon*(仅传 size/className)');
+
+      // 验证 Prim.Switch 布尔值回调与 Prim.Menu(portal:true) 在 document mousedown 先于 click 冒泡时不提前卸载
+      const prevDoc23 = globalThis.document;
+      const docListeners23 = new Map();
+      globalThis.document = {
+        addEventListener: (ev, fn) => {
+          if (!docListeners23.has(ev)) docListeners23.set(ev, new Set());
+          docListeners23.get(ev).add(fn);
+        },
+        removeEventListener: (ev, fn) => {
+          if (docListeners23.has(ev)) docListeners23.get(ev).delete(fn);
+        },
+      };
+      const fireDocMouseDown23 = (target) => {
+        const set = docListeners23.get('mousedown');
+        if (set) for (const fn of [...set]) fn({ target });
+      };
+      try {
+        const primSw = pPrim.buttons.find((b) => b['data-prim-switch'] === '1');
+        primSw.onClick();
+        pPrim = render();
+        const primExecTrigger = pPrim.buttons.find((b) => String(b.className || '').includes('rdp-exec-btn'));
+        primExecTrigger.onClick();
+        pPrim = render();
+        const cleanups23 = [];
+        for (const eff of pPrim.effects) {
+          const cl = eff();
+          if (typeof cl === 'function') cleanups23.push(cl);
+        }
+        const agyMenuItemBeforeDown = pPrim.buttons.find((b) => b['data-prim-item'] === 'agy');
+        ok(!!agyMenuItemBeforeDown, 'v2.3.0：Prim.Menu 展开渲染全部 CLI 选项');
+
+        // 模拟 createPortal(menu, document.body) 下的真实点击顺序：先冒泡 document mousedown（不在 .rdp-pick 内，在 [role="menu"] 内），再触发 onClick
+        fireDocMouseDown23({
+          closest: (sel) => (sel === '[role="menu"]' ? { role: 'menu' } : null),
+        });
+        pPrim = render();
+        const agyMenuItemAfterDown = pPrim.buttons.find((b) => b['data-prim-item'] === 'agy');
+        ok(!!agyMenuItemAfterDown,
+          'v2.3.0：portaled Prim.Menu 菜单项触发 document mousedown 时不被 Page 提前卸载');
+
+        agyMenuItemAfterDown.onClick();
+        for (const cl of cleanups23) cl();
+        pPrim = render();
+        savedPatches = [];
+        pPrim.buttons.find((b) => txt23(b.children) === '保存').onClick();
+        await tick(); await tick();
+        ok(savedPatches.length === 1
+          && savedPatches[0].divergeUseDeadEnds === 'false'
+          && savedPatches[0].scoutCommand === 'agy',
+          'v2.3.0：Prim.Switch 布尔回调与 portaled Prim.Menu 点击选择完整驱动设置保存');
+      } finally {
+        if (prevDoc23 === undefined) delete globalThis.document;
+        else globalThis.document = prevDoc23;
+      }
+
+      // ④ /swarm 拓扑画布缩放、滚轮钳制、拖拽平移、重置视图与 working 连线脉冲断言
+      mod.__test.setSwarmSnapshot({
+        ok: true,
+        repoRoot: repo,
+        repoName: '科研工作流',
+        initialized: true,
+        activeTopic: 'demo-topic',
+        activeWorkerCount: 1,
+        stages: [{ id: 'S4', code: 'S4', title: '多票盲审', badge: '1 运行中', status: 'working' }],
+        ideas: [{ ideaId: 'idea_01', rank: 1, meanScore25: 21.0, voteCount: 2, verdict: 'pending' }],
+        graph: {
+          focusStage: 'S4',
+          focusIdeaId: 'idea_01',
+          nodes: [
+            { id: 'n-in', x: 118, y: 255, kind: 'input', title: '工单 idea_01', subtitle: 'brief', badge: 'sha:111', status: 'done' },
+            { id: 'n-hub', x: 342, y: 255, kind: 'hub', title: '盲审调度', subtitle: 'fanout', badge: '2 票', status: 'working' },
+            { id: 'n-w1', x: 590, y: 180, kind: 'worker', seat: 'codex', title: 'codex 票', subtitle: 'gpt-5', badge: 'GO', status: 'done' },
+            { id: 'n-w2', x: 590, y: 330, kind: 'worker', seat: 'agy', title: 'agy 票', subtitle: 'gemini-4', badge: '运行中', status: 'working' },
+            { id: 'n-gate', x: 848, y: 255, kind: 'gate', title: '人类拍板', subtitle: '21.0/25', badge: '待裁决', status: 'pending' },
+          ],
+          edges: [
+            { id: 'ed-done', from: 'n-in', to: 'n-hub', status: 'done' },
+            { id: 'ed-w1', from: 'n-hub', to: 'n-w1', status: 'done' },
+            { id: 'ed-working', from: 'n-hub', to: 'n-w2', status: 'working' },
+            { id: 'ed-gate', from: 'n-w1', to: 'n-gate', status: 'pending' },
+          ],
+        },
+      });
+      hookState.length = 0;
+      const renderSwarm23 = () => {
+        hookCursor = 0;
+        pendingEffects = [];
+        return expand23(mod.__test.SwarmStudio({ repoRoot: repo, embedded: true }));
+      };
+
+      let swTree = renderSwarm23();
+      const pulses = find23(swTree, (n) => n.type === 'circle' && String(n.props.className || '').includes('rdp-edge-pulse'));
+      const pctOf = (tr) => txt23(find23(tr, (n) => String((n.props || {}).className || '').includes('rdp-zoom-pct'))[0]);
+      const stageTrOf = (tr) => find23(tr, (n) => n.type === 'g' && String((n.props || {}).className || '').includes('rdp-svg-stage'))[0].props.transform;
+      const zoomBtnOf = (tr, act) => find23(tr, (n) => n.type === 'button' && (n.props || {})['data-zoom-act'] === act)[0];
+      const viewportOf = (tr) => find23(tr, (n) => n.type === 'div' && String((n.props || {}).className || '').includes('rdp-canvas-viewport'))[0];
+
+      ok(pulses.length === 1 && pctOf(swTree) === '100%',
+        'v2.3.0：/swarm 画布默认 100% 视图，且仅在 working 连线上渲染微光流动脉冲点（共 1 条）');
+
+      // 点击 + 放大至 115%
+      zoomBtnOf(swTree, 'in').props.onClick();
+      swTree = renderSwarm23();
+      ok(pctOf(swTree) === '115%' && stageTrOf(swTree).includes('scale(1.15)'),
+        'v2.3.0：点击悬浮控制条 + 按钮放大拓扑画布至 115%');
+
+      // 连续滚轮放大验证上限钳制 165%（1.65x）
+      for (let i = 0; i < 10; i++) viewportOf(swTree).props.onWheel({ deltaY: -100, preventDefault() {} });
+      swTree = renderSwarm23();
+      ok(pctOf(swTree) === '165%' && zoomBtnOf(swTree, 'in').props.disabled === true,
+        'v2.3.0：滚轮放大严格钳制在上限 165%（1.65x）并禁用 + 按钮');
+
+      // 连续滚轮缩小验证下限钳制 65%（0.65x）
+      for (let i = 0; i < 15; i++) viewportOf(swTree).props.onWheel({ deltaY: 100, preventDefault() {} });
+      swTree = renderSwarm23();
+      ok(pctOf(swTree) === '65%' && zoomBtnOf(swTree, 'out').props.disabled === true,
+        'v2.3.0：滚轮缩小严格钳制在下限 65%（0.65x）并禁用 - 按钮');
+
+      // 背景指针拖拽平移画布
+      viewportOf(swTree).props.onPointerDown({ button: 0, pointerId: 1, clientX: 100, clientY: 120, target: { closest: () => null } });
+      swTree = renderSwarm23();
+      viewportOf(swTree).props.onPointerMove({ clientX: 165, clientY: 95 });
+      viewportOf(swTree).props.onPointerUp({});
+      swTree = renderSwarm23();
+      ok(stageTrOf(swTree).includes('translate(555,235)'),
+        'v2.3.0：背景拖拽顺滑更新拓扑视口平移偏移（+65, -25）');
+
+      // 点击「重置视图」一键归零至 100% 与原位 (490,260)
+      zoomBtnOf(swTree, 'reset').props.onClick();
+      swTree = renderSwarm23();
+      ok(pctOf(swTree) === '100%' && stageTrOf(swTree).includes('translate(490,260) scale(1)'),
+        'v2.3.0：点击「重置视图」按钮一键将缩放与平移复位至 100% 初始坐标');
+
       mod.__test.resetSwarmSnapshot();
     }
   }

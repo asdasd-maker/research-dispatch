@@ -1,8 +1,8 @@
-# 设置卡片视觉规范 · research-dispatch（v2.1.2）
+# 设置卡片视觉规范 · research-dispatch（v2.3.0）
 
-> 基准：`dsh-claude-style`。宿主设计语言由 alias 令牌定义，本文件只做**转写与落位**：
-> 把同一套视觉语言用到「科研派工 · 全流程阵容」设置页上，不引入独立色板或第三种卡片样式。
-> 改这张卡先读这里；改品牌色去改宿主主题令牌，不要在组件里硬编码颜色。
+> 基准：`dsh-claude-style` + `@deepseek-ai/dsh-client-ui-primitives`（离线沙箱自动回退 1.5px 描边 SVG 与语义 HTML）。
+> 宿主设计语言由 `--dsw-alias-*` 令牌定义，本文件只做**转写与落位**：
+> 把同一套温润极简视觉语言用到「科研派工 · 全流程阵容与拓扑」工作台上，零原生 `<select>`、零 Unicode 伪图标、零刺眼渐变与大面积扩散阴影，所有数值启用 `tabular-nums`。
 
 ## 0. 页面结构与全流程编排原则
 
@@ -12,9 +12,9 @@
 工作流项目 → 文献调研 → 想法发散 → 多票评审 → 前置查重
 ```
 
-- **工作流项目**：指定当前科研项目文件夹路径（留空则自动探测）。点击底部「保存」后，面板各环节阵容会自动通过 `syncPanelLineupToSeats` 写穿同步进该项目配置文件（`dispatch/seats.json` 的 `lineup`），桌面端与外部命令行共享同一份生效阵容，且绝不改动用户手写的底层座位属性。
-- **文献调研（S0）**：选择由谁检索相关论文、优先提取源码/公式并整理结构化文献卡片（`默认（按配置）` 或五大 CLI 工具联动模型）。
-- **想法发散（S2）**：选择由谁产出候选研究想法，并内联配置**「单轮默认条数」**（`1–50` 数字输入，默认 `10`）与**「历史死胡同过滤」**（`常规挂载已证伪方向（防重复踩坑）` vs `纯空白零历史锚定模式（跳出既有框架）`）。
+- **工作流项目**：指定当前科研项目文件夹路径（留空则自动探测；宿主挂载 `uiWorkspace.pickDirectory` 或 `directoryPicker` 时内联展示原生「浏览…」按钮，误填 `.dsh/profiles/*` 时自动净化提示）。点击底部「保存」后，面板各环节阵容会自动通过 `syncPanelLineupToSeats` 写穿同步进该项目配置文件（`dispatch/seats.json` 的 `lineup`），桌面端与外部命令行共享同一份生效阵容，且绝不改动用户手写的底层座位属性。
+- **文献调研（S0）**：通过 DSH 风格定制下拉组件 `ExecPicker`（宿主持有 `Prim.Menu` 时自动走 `portal: true` 弹出菜单，离线环境走无障碍 `role="listbox"`）选择由谁检索论文并整理结构化文献卡片（`默认（按配置）` 或五大 CLI 工具联动模型）。
+- **想法发散（S2）**：选择由谁产出候选研究想法，并内联配置**「单轮默认条数」**（`1–50` 等宽数字输入，默认 `10`）与**「历史死胡同过滤」**无障碍拨杆 `UiSwitch`（`Prim.Switch` / `role="switch"`，带清晰中文开启/关闭状态说明）。
 - **多票评审（S4）**：多评审员独立打分的阵容与票数。支持五大 CLI 工具自由增删，允许**同一工具排多票对比不同模型**（如两票 `codex` 分别选不同模型），也允许跨工具使用同一模型（系统如实记录票源，不强行毁票）；留空（0 票）则按项目配置文件里的默认阵容运行。
 - **前置查重（S4.5）**：选择由谁在投入正式长训前对入围想法执行单单隔离的外部查新。
 - **五合一清晰工具列表（移除 `api` 干扰项）**：前端统一展示五大真实 CLI 工具——`codex · Codex CLI`、`claude · Claude Code`、`dsh · DeepSeek Harness`、`agy · Antigravity`、`kimi · Kimi Code`（本机未检测到命令时柔和标注 `（未检测到命令）`；仅当历史旧配置当前值残留 `api` 或 `gemini` 时才渲染兼容项供用户平滑切走）。
@@ -44,8 +44,8 @@
 | 分区与行分隔线 | `--dsw-alias-border-l2` | 0.5px |
 | 悬停浮层 | `--dsw-alias-bg-layer-2` | 按钮与弹层选项悬停 |
 | 强调色 | `--dsw-alias-brand-primary` | 焦点环 / 主按钮回退 / 选中标记 |
-| 主按钮 | `--dsw-alias-button-primary-fill` / `-hover` | 带品牌色回退 |
-| 危险态 | `--dsw-alias-state-danger-fg` | 删除按钮仅悬停显色 |
+| 主按钮 | `--dsw-alias-button-primary-fill` / `-hover` + `--dsw-alias-label-primary-foreground` | 带品牌色与白色字回退 |
+| 告警与危险态 | `--dsw-alias-state-warn-primary` / `--dsw-alias-state-error-primary` | 删除按钮仅悬停显色 |
 
 ## 3. 版式
 
