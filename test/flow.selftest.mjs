@@ -443,6 +443,68 @@ try {
     fs.rmSync(dynB, { recursive: true, force: true });
   });
 
+  await ta('v2.1.0：agents / status / preview 均暴露四阶段 lineup 与 stages（scout / diverge / review / novelty）', async () => {
+    const st4 = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-4stages-'));
+    try {
+      fs.mkdirSync(path.join(st4, 'dispatch'), { recursive: true });
+      fs.mkdirSync(path.join(st4, 'ideas', 'briefs'), { recursive: true });
+      fs.writeFileSync(path.join(st4, 'ideas', 'briefs', 'idea_01.md'), [
+        '<!-- meta role=brief idea=idea_01 anchor=none -->',
+        '### Baseline',
+        'ResNet-50 Top-1 = 78.4%',
+        '### Idea',
+        '**ID**: idea_01',
+      ].join('\n'));
+      fs.writeFileSync(path.join(st4, 'dispatch', 'seats.json'), JSON.stringify({
+        version: 2,
+        paths: { cards_dir: 'ideas/cards', workers_dir: 'workers', require_anchor: false },
+        default_backends: ['codex', 'claude'],
+        policy: { require_unique_models: false },
+        lineup: {
+          scout: { seat: 'gemini', model: 'gemini-2.5-pro' },
+          diverge: { seat: 'codex', model: 'gpt-5', count: 7, use_dead_ends: false },
+          review: [
+            { seat: 'codex', model: 'gpt-5' },
+            { seat: 'claude', model: 'claude-sonnet-4-5' },
+          ],
+          novelty: { seat: 'claude', model: 'claude-sonnet-4-5' },
+        },
+        seats: [
+          { id: 'codex', kind: 'cli', enabled: true, command: 'node', argv: ['-v'], identity: { kind: 'config', explicit_env: 'CODEX_MODEL' } },
+          { id: 'claude', kind: 'cli', enabled: true, command: 'node', argv: ['-v'], identity: { kind: 'config', explicit_env: 'CLAUDE_MODEL' } },
+          { id: 'gemini', kind: 'cli', enabled: true, command: 'node', argv: ['-v'], identity: { kind: 'gemini', explicit_env: 'GEMINI_MODEL' } },
+        ],
+      }, null, 2));
+
+      const ag = await ft.dispatchFlow({ action: 'agents' }, { repoRoot: st4 });
+      assert.equal(ag.ok, true);
+      assert.ok(ag.lineup && ag.stages, 'agents 应返回 lineup 与 stages');
+      assert.equal(ag.stages.scout.seat, 'gemini');
+      assert.equal(ag.stages.scout.model, 'gemini-2.5-pro');
+      assert.equal(ag.stages.diverge.seat, 'codex');
+      assert.equal(ag.stages.diverge.count, 7);
+      assert.equal(ag.stages.diverge.use_dead_ends, false);
+      assert.equal(ag.stages.review.slots.length, 2);
+      assert.equal(ag.stages.novelty.seat, 'claude');
+      assert.equal(ag.stages.novelty.model, 'claude-sonnet-4-5');
+
+      const stRes = await ft.dispatchFlow({ action: 'status' }, { repoRoot: st4 });
+      assert.equal(stRes.ok, true);
+      assert.ok(stRes.stages, '有 seats.json 时 status 应附带四阶段 stages 快照');
+      assert.equal(stRes.stages.scout.seat, 'gemini');
+      assert.equal(stRes.stages.diverge.count, 7);
+      assert.equal(stRes.stages.novelty.seat, 'claude');
+
+      const pvRes = await ft.dispatchFlow({ action: 'preview', brief: 'ideas/briefs/idea_01.md' }, { repoRoot: st4 });
+      assert.equal(pvRes.ok, true, JSON.stringify(pvRes));
+      assert.ok(pvRes.stages, 'preview 应附带四阶段 stages 快照');
+      assert.equal(pvRes.stages.review.slots.length, 2);
+      assert.equal(pvRes.stages.diverge.use_dead_ends, false);
+    } finally {
+      fs.rmSync(st4, { recursive: true, force: true });
+    }
+  });
+
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

@@ -76,9 +76,11 @@ function cleanChildEnv(root, extra = {}) {
   const env = { ...process.env };
   for (const k of [
     'DSH_DISPATCH_BASH', 'RESEARCH_DISPATCH_BASH', 'DSH_DISPATCH_ROOT',
-    'DSH_DISPATCH_CONFIG', 'DSH_DISPATCH_SETTINGS', 'RESEARCH_DISPATCH_DIAG',
-    'BACKENDS', 'DRY', 'CALIBRATION', 'API_VOTES', 'ALLOW_DOOMED_PLAN',
-    'CODEX_MODEL', 'CLAUDE_MODEL', 'DSH_MODEL', 'API_MODEL',
+    'DSH_DISPATCH_CONFIG', 'DSH_DISPATCH_SETTINGS', 'DSH_DISPATCH_USE_PATCH', 'RESEARCH_DISPATCH_DIAG',
+    'BACKENDS', 'REVIEW_LINEUP', 'SCOUT_AGENT', 'DIVERGE_AGENT', 'NOVELTY_AGENT',
+    'DRY', 'CALIBRATION', 'API_VOTES', 'ALLOW_DOOMED_PLAN',
+    'CODEX_MODEL', 'CLAUDE_MODEL', 'GEMINI_MODEL', 'KIMI_MODEL', 'DSH_MODEL', 'API_MODEL',
+    'CODEX_CFG', 'CLAUDE_CFG', 'GEMINI_CFG', 'KIMI_CFG', 'DSH_SETTINGS', 'DSH_PROFILE', 'GEMINI_CLI_PKG_DIR',
     'OPENAI_BASE_URL', 'OPENAI_API_KEY', 'QODER_SEAT_MODEL', 'QODER_ATTEST_SHA',
     'MANUAL1_BODY', 'MANUAL1_MODEL', 'MANUAL1_SHA', 'MANUAL2_MODEL', 'MANUAL2_SHA',
   ]) {
@@ -201,6 +203,7 @@ try {
     const dryCfg = JSON.parse(fs.readFileSync(path.join(ws, 'dispatch', 'seats.json'), 'utf8'));
     const apiSeat = dryCfg.seats.find((s) => s.id === 'api');
     apiSeat.enabled = true;
+    delete dryCfg.lineup;
     dryCfg.default_backends = ['api'];
     const customSeatsRel = 'dispatch/seats.api-dry.json';
     fs.writeFileSync(path.join(ws, customSeatsRel), JSON.stringify(dryCfg, null, 2));
@@ -935,6 +938,497 @@ try {
     });
     assert.equal(rNoBash.rc, 0, '无 Git Bash 纯 Windows 下含空格目录 .cmd + 多行工单应退 0，实得 ' + rNoBash.rc + '：\n' + rNoBash.out);
     assert.ok(fs.existsSync(path.join(wWs, 'ideas', 'cards', 'idea_cmd.claude.md')));
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 5) v2.1.0 深度模型探测、Kimi 输出格式、四阶段阵容解析与面板写穿同步回归
+  // ═══════════════════════════════════════════════════════════════════════════
+  console.log('\n── 5) v2.1.0 深度模型探测、四阶段阵容解析与面板写穿同步回归 ────────');
+
+  t('v2.1.0 probeAgentModelsFromConfigs：五类 CLI 深度模型发现、DSH 路由防丢前缀与零密钥泄露', () => {
+    const pDir = mkTmp('v21-probe');
+    const savedEnv = {};
+    const envKeys = [
+      'HOME', 'USERPROFILE', 'DSH_HOME', 'DSH_SETTINGS', 'DSH_PROFILE',
+      'CODEX_CFG', 'CODEX_MODEL', 'CLAUDE_CFG', 'CLAUDE_MODEL',
+      'GEMINI_CFG', 'GEMINI_MODEL', 'GEMINI_CLI_PKG_DIR',
+      'KIMI_CFG', 'KIMI_MODEL', 'DSH_MODEL', 'API_MODEL',
+    ];
+    for (const k of envKeys) savedEnv[k] = process.env[k];
+
+    try {
+      const fakeHome = path.join(pDir, 'home');
+      const codexDir = path.join(fakeHome, '.codex');
+      const claudeDir = path.join(fakeHome, '.claude');
+      const geminiDir = path.join(fakeHome, '.gemini');
+      const kimiDir = path.join(fakeHome, '.kimi');
+      const dshDir = path.join(fakeHome, '.dsh');
+      const mockGemPkg = path.join(pDir, 'mock-gemini-cli');
+      for (const d of [
+        codexDir, claudeDir, geminiDir, kimiDir,
+        path.join(dshDir, 'storages'),
+        path.join(dshDir, 'profiles', 'desktop'),
+        path.join(mockGemPkg, 'bundle'),
+      ]) {
+        fs.mkdirSync(d, { recursive: true });
+      }
+
+      // 1) codex: config.toml + models_cache.json + cc-switch-model-catalog.json
+      fs.writeFileSync(path.join(codexDir, 'config.toml'), [
+        'model = "gpt-5.4"',
+        '[profiles.fast]',
+        'model = "o4-mini"',
+      ].join('\n'));
+      fs.writeFileSync(path.join(codexDir, 'models_cache.json'), JSON.stringify({
+        models: [
+          { slug: 'gpt-5-codex', description: 'cached' },
+          { id: 'o3-pro' },
+        ],
+      }));
+      fs.writeFileSync(path.join(codexDir, 'cc-switch-model-catalog.json'), JSON.stringify([
+        { id: 'codex-cc-1' },
+        'codex-cc-2',
+      ]));
+
+      // 2) claude: settings.json env.*MODEL 全族提取 + 严禁泄露密钥
+      fs.writeFileSync(path.join(claudeDir, 'settings.json'), JSON.stringify({
+        env: {
+          ANTHROPIC_AUTH_TOKEN: 'sk-ant-mocksecret-9999999999999999',
+          ANTHROPIC_API_KEY: 'sk-ant-mockkey-8888888888888888',
+          ANTHROPIC_DEFAULT_FABLE_MODEL: 'glm-5-fable',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-4-1',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-4-5',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-haiku-3-5',
+          CLAUDE_CODE_SUBAGENT_MODEL: 'claude-sub-4',
+          ANTHROPIC_SMALL_FAST_MODEL: 'claude-fast-mini',
+          INVALID_SPACE_MODEL: 'not a valid id',
+        },
+        availableModels: ['claude-avail-1', { id: 'claude-avail-2' }],
+      }, null, 2));
+
+      // 3) kimi: 顶层 default_model + [models.<id>] 节名剥引号（忽略子表内上游裸 model 键）
+      fs.writeFileSync(path.join(kimiDir, 'config.toml'), [
+        'default_model = "sensenova/glm-5.2"',
+        '',
+        '[models."sensenova/kimi-k3"]',
+        'provider = "sensenova"',
+        'model = "kimi-k3"',
+        '',
+        "[models.'moonshot/kimi-k2-thinking']",
+        'provider = "moonshot"',
+        'model = "kimi-k2-thinking"',
+      ].join('\n'));
+
+      // 4) gemini: settings.json + @google/gemini-cli 包内常量扫描（过滤 none/embedding/computer-use）+ 6 项兜底
+      fs.writeFileSync(path.join(geminiDir, 'settings.json'), JSON.stringify({
+        model: { name: 'gemini-custom-local' },
+      }));
+      fs.writeFileSync(path.join(mockGemPkg, 'bundle', 'chunk-models.js'), [
+        'export const PREVIEW_GEMINI_3_1_MODEL = "gemini-3.1-pro-preview-pkg";',
+        'export const LATEST_GEMINI_FLASH_MODEL = "gemini-flash-latest";',
+        'export const DEFAULT_GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";',
+        'export const PREVIEW_GEMINI_COMPUTER_USE_MODEL = "gemini-2.5-computer-use-preview";',
+        'export const SECONDARY_GEMINI_MODEL = "none";',
+      ].join('\n'));
+
+      // 5) dsh: settings.yaml 含多层斜杠路由 + storages 裸 enabledModelIds/hiddenModels + cordis.patch.yml llm-pi-ai
+      fs.writeFileSync(path.join(dshDir, 'settings.yaml'), [
+        'agent-default-model:',
+        '  provider: magpie',
+        '  model: auto/deepseek-v4.1-flash',
+      ].join('\n'));
+      fs.writeFileSync(path.join(dshDir, 'storages', 'opendesign-models.json'), JSON.stringify({
+        catalogModels: [
+          { id: 'deepseek-v4.1-flash' },
+          { id: 'disabled-model' },
+          { id: 'hidden-model' },
+        ],
+        enabledModelIds: ['deepseek-v4.1-flash', 'hidden-model'],
+        hiddenModels: ['hidden-model'],
+      }));
+      fs.writeFileSync(path.join(dshDir, 'storages', 'workbuddy-models.json'), JSON.stringify({
+        enabledModelIds: ['glm-5.3'],
+      }));
+      fs.writeFileSync(path.join(dshDir, 'profiles', 'desktop', 'cordis.patch.yml'), [
+        '- id: llm-pi-ai',
+        '  enabled: true',
+        '  config:',
+        '    providers:',
+        '      magpie:',
+        '        apiKey: sk-secret-never-read-777777777777',
+        '        models:',
+        '          - id: auto/qwen3-coder',
+        '          - id: magpie/already-qualified',
+        '      disabled-prov:',
+        '        enabled: false',
+        '        models:',
+        '          - id: should-not-appear',
+      ].join('\n'));
+
+      for (const k of envKeys) delete process.env[k];
+      process.env.HOME = fakeHome;
+      process.env.USERPROFILE = fakeHome;
+      process.env.DSH_HOME = dshDir;
+      process.env.GEMINI_CLI_PKG_DIR = mockGemPkg;
+
+      const probed = models.probeAgentModelsFromConfigs();
+      const serialized = JSON.stringify(probed);
+      assert.ok(!serialized.includes('sk-ant-') && !serialized.includes('sk-secret-never-read'),
+        '探测结果严禁包含任何密钥明文');
+
+      // codex 校验
+      assert.equal(probed.codex.defaultModel, 'gpt-5.4');
+      for (const m of ['gpt-5.4', 'o4-mini', 'gpt-5-codex', 'o3-pro', 'codex-cc-1', 'codex-cc-2']) {
+        assert.ok(probed.codex.models.includes(m), 'codex 缺失模型: ' + m);
+      }
+
+      // claude 校验
+      assert.equal(probed.claude.defaultModel, 'claude-sonnet-4-5');
+      for (const m of [
+        'glm-5-fable', 'claude-opus-4-1', 'claude-sonnet-4-5',
+        'claude-haiku-3-5', 'claude-sub-4', 'claude-fast-mini',
+        'claude-avail-1', 'claude-avail-2',
+      ]) {
+        assert.ok(probed.claude.models.includes(m), 'claude 缺失模型: ' + m);
+      }
+      assert.ok(!probed.claude.models.some((x) => /\s/.test(x)), '含空白字符的值不应混入模型列表');
+
+      // kimi 校验
+      assert.equal(probed.kimi.defaultModel, 'sensenova/glm-5.2');
+      assert.deepEqual(probed.kimi.models, [
+        'sensenova/glm-5.2',
+        'sensenova/kimi-k3',
+        'moonshot/kimi-k2-thinking',
+      ]);
+
+      // gemini 校验
+      assert.equal(probed.gemini.defaultModel, 'gemini-custom-local');
+      for (const m of [
+        'gemini-custom-local',
+        'gemini-3.1-pro-preview-pkg',
+        'gemini-flash-latest',
+        'gemini-2.5-pro',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-3.1-pro-preview',
+        'gemini-3-pro-preview',
+        'gemini-3-flash-preview',
+      ]) {
+        assert.ok(probed.gemini.models.includes(m), 'gemini 缺失模型: ' + m);
+      }
+      for (const banned of ['none', 'gemini-embedding-001', 'gemini-2.5-computer-use-preview']) {
+        assert.ok(!probed.gemini.models.includes(banned), 'gemini 应过滤非对话模型: ' + banned);
+      }
+
+      // dsh 校验：多层斜杠路由补齐 magpie/ 前缀 + storages enabledModelIds 裸名兼容 + llm-pi-ai 合并
+      assert.equal(models.dshLiveModel(), 'magpie/auto/deepseek-v4.1-flash');
+      assert.equal(probed.dsh.defaultModel, 'magpie/auto/deepseek-v4.1-flash');
+      for (const m of [
+        'magpie/auto/deepseek-v4.1-flash',
+        'opendesign/deepseek-v4.1-flash',
+        'workbuddy/glm-5.3',
+        'magpie/auto/qwen3-coder',
+        'magpie/already-qualified',
+      ]) {
+        assert.ok(probed.dsh.models.includes(m), 'dsh 缺失模型: ' + m);
+      }
+      assert.ok(!probed.dsh.models.includes('opendesign/disabled-model'), '未启用的 catalog 模型应被过滤');
+      assert.ok(!probed.dsh.models.includes('opendesign/hidden-model'), 'hiddenModels 应被过滤');
+      assert.ok(!probed.dsh.models.includes('disabled-prov/should-not-appear'), '禁用 provider 的模型不应被采集');
+
+      // profilePatchModel 同样支持 provider + 含斜杠 model 且防双拼
+      fs.unlinkSync(path.join(dshDir, 'settings.yaml'));
+      fs.writeFileSync(path.join(dshDir, 'cordis.patch.yml'), [
+        '- id: agent-default-model',
+        '  config:',
+        '    provider: magpie',
+        '    model: auto/deepseek-v4.1-flash',
+      ].join('\n'));
+      assert.equal(models.dshLiveModel(), 'magpie/auto/deepseek-v4.1-flash');
+
+      // DSH_SETTINGS 自定义覆盖单测隔离：不串读 profile 与 storages
+      const isolatedSettings = path.join(pDir, 'custom-isolated-settings.yaml');
+      fs.writeFileSync(isolatedSettings, [
+        'agent-default-model:',
+        '  provider: magpie',
+        '  model: magpie/auto/no-double-prefix',
+      ].join('\n'));
+      process.env.DSH_SETTINGS = isolatedSettings;
+      assert.equal(models.dshLiveModel(), 'magpie/auto/no-double-prefix');
+      assert.deepEqual(models.readDshCatalogModels(), []);
+    } finally {
+      for (const k of envKeys) {
+        if (savedEnv[k] === undefined) delete process.env[k];
+        else process.env[k] = savedEnv[k];
+      }
+    }
+  });
+
+  t('v2.1.0 BUILT_IN_CLI_SEATS.kimi 与 examples/seats.example.json：text 输出格式与四阶段 lineup 示例', () => {
+    const kimiBuiltIn = registry.BUILT_IN_CLI_SEATS.kimi;
+    assert.ok(kimiBuiltIn && Array.isArray(kimiBuiltIn.argv));
+    const fmtIdx = kimiBuiltIn.argv.indexOf('--output-format');
+    assert.ok(fmtIdx >= 0 && kimiBuiltIn.argv[fmtIdx + 1] === 'text', '内置 kimi 座位必须使用 --output-format text');
+    assert.ok(!kimiBuiltIn.argv.includes('stream-json'), '内置 kimi 座位不应残留 stream-json');
+
+    const exDir = mkTmp('v21-example');
+    fs.mkdirSync(path.join(exDir, 'dispatch'), { recursive: true });
+    fs.copyFileSync(
+      path.join(SRC, 'examples', 'seats.example.json'),
+      path.join(exDir, 'dispatch', 'seats.json'),
+    );
+    const exCfg = registry.loadConfig(exDir, undefined, { useDshPatch: false });
+    const exKimi = registry.findSeat(exCfg, 'kimi');
+    assert.ok(exKimi && exKimi.argv.includes('text') && !exKimi.argv.includes('stream-json'));
+    for (const cliId of ['codex', 'claude', 'dsh', 'gemini', 'kimi']) {
+      const s = registry.findSeat(exCfg, cliId);
+      assert.ok(s && s.enabled === true, 'examples/seats.example.json 中真实 CLI 座 ' + cliId + ' 默认应为 enabled: true');
+    }
+    assert.equal(registry.findSeat(exCfg, 'api').enabled, false);
+    assert.equal(registry.findSeat(exCfg, 'manual1').enabled, false);
+    assert.ok(exCfg.lineup && exCfg.lineup.scout && exCfg.lineup.diverge && Array.isArray(exCfg.lineup.review) && exCfg.lineup.novelty);
+    assert.equal(exCfg.lineup.diverge.count, 10);
+    assert.equal(exCfg.lineup.diverge.use_dead_ends, true);
+    assert.ok(registry.findSeat(exCfg, 'api') && registry.findSeat(exCfg, 'manual1'));
+  });
+
+  t('v2.1.0 resolveStagePlan 与 resolveDivergePlan：完整优先级链及发散策略默认值', () => {
+    const stDir = mkTmp('v21-stage');
+    const patchPath = path.join(stDir, 'cordis.patch.yml');
+    const saved = {
+      SCOUT_AGENT: process.env.SCOUT_AGENT,
+      DIVERGE_AGENT: process.env.DIVERGE_AGENT,
+      NOVELTY_AGENT: process.env.NOVELTY_AGENT,
+      DSH_DISPATCH_SETTINGS: process.env.DSH_DISPATCH_SETTINGS,
+    };
+
+    try {
+      delete process.env.SCOUT_AGENT;
+      delete process.env.DIVERGE_AGENT;
+      delete process.env.NOVELTY_AGENT;
+      delete process.env.DSH_DISPATCH_SETTINGS;
+
+      const baseCfg = {
+        version: 2,
+        default_backends: ['codex', 'claude'],
+        seats: [
+          { id: 'codex', kind: 'cli', command: 'codex', argv: ['exec'], enabled: true },
+          { id: 'claude', kind: 'cli', command: 'claude', argv: ['-p', '{payload}'], enabled: true },
+          { id: 'dsh', kind: 'cli', command: 'dsh', argv: ['{payload}'], enabled: true },
+        ],
+        lineup: {
+          diverge: { seat: 'claude', model: 'claude-sonnet-4-5', count: 14, use_dead_ends: false },
+        },
+      };
+
+      // 1) 非法阶段名显式拒收
+      const badStage = registry.resolveStagePlan(baseCfg, 'unknown-stage');
+      assert.equal(badStage.ok, false);
+      assert.equal(badStage.code, 'BAD_STAGE');
+
+      // 2) lineup.scout 未配时自动回退 lineup.diverge，再回退 default_backends[0]
+      const scoutFallbackDiv = registry.resolveStagePlan(baseCfg, 'scout', { useDshPatch: false });
+      assert.equal(scoutFallbackDiv.ok, true);
+      assert.equal(scoutFallbackDiv.seatId, 'claude');
+      assert.equal(scoutFallbackDiv.model, 'claude-sonnet-4-5');
+      assert.equal(scoutFallbackDiv.source, 'lineup-diverge');
+
+      const noLineupCfg = { ...baseCfg, lineup: {} };
+      const novFallbackDef = registry.resolveStagePlan(noLineupCfg, 'novelty', { useDshPatch: false });
+      assert.equal(novFallbackDef.ok, true);
+      assert.equal(novFallbackDef.seatId, 'codex');
+      assert.equal(novFallbackDef.source, 'default');
+
+      // 3) lineup[stageName] 优先于 lineup.diverge
+      const fourStageCfg = {
+        ...baseCfg,
+        lineup: {
+          scout: { seat: 'gemini', model: 'gemini-2.5-pro' },
+          diverge: { seat: 'kimi', model: 'sensenova/glm-5.2', count: 16, use_dead_ends: false },
+          novelty: { seat: 'dsh', model: 'magpie/auto/qwen3-coder' },
+        },
+      };
+      const sLineup = registry.resolveStagePlan(fourStageCfg, 'scout', { useDshPatch: false });
+      assert.equal(sLineup.ok, true);
+      assert.equal(sLineup.seatId, 'gemini');
+      assert.equal(sLineup.model, 'gemini-2.5-pro');
+      assert.equal(sLineup.source, 'lineup');
+
+      const dLineup = registry.resolveDivergePlan(fourStageCfg, { useDshPatch: false });
+      assert.equal(dLineup.ok, true);
+      assert.equal(dLineup.seatId, 'kimi');
+      assert.equal(dLineup.model, 'sensenova/glm-5.2');
+      assert.equal(dLineup.defaultCount, 16);
+      assert.equal(dLineup.defaultUseDeadEnds, false);
+
+      // 4) DSH 面板激活时覆盖 lineup（未激活时不生效）
+      fs.writeFileSync(patchPath, [
+        '- id: research-dispatch',
+        '  config:',
+        '    scoutCommand: codex',
+        '    scoutModel: gpt-5.4',
+        '    divergeCommand: claude',
+        '    divergeModel: claude-opus-4-1',
+        '    divergeCount: "22"',
+        '    divergeUseDeadEnds: "true"',
+        '    noveltyCommand: kimi',
+        '    noveltyModel: sensenova/kimi-k3',
+      ].join('\n'));
+      process.env.DSH_DISPATCH_SETTINGS = patchPath;
+
+      const sPanel = registry.resolveStagePlan(fourStageCfg, 'scout', { useDshPatch: true });
+      assert.equal(sPanel.seatId, 'codex');
+      assert.equal(sPanel.model, 'gpt-5.4');
+      assert.equal(sPanel.source, 'panel');
+
+      const dPanel = registry.resolveDivergePlan(fourStageCfg, { useDshPatch: true });
+      assert.equal(dPanel.seatId, 'claude');
+      assert.equal(dPanel.model, 'claude-opus-4-1');
+      assert.equal(dPanel.source, 'panel');
+      assert.equal(dPanel.defaultCount, 22);
+      assert.equal(dPanel.defaultUseDeadEnds, true);
+
+      const nPanel = registry.resolveStagePlan(fourStageCfg, 'novelty', { useDshPatch: true });
+      assert.equal(nPanel.seatId, 'kimi');
+      assert.equal(nPanel.model, 'sensenova/kimi-k3');
+      assert.equal(nPanel.source, 'panel');
+
+      // 5) 环境变量 <STAGE>_AGENT 优先于面板，opts.agent 最高优
+      process.env.SCOUT_AGENT = 'kimi:moonshot/kimi-k2';
+      const sEnv = registry.resolveStagePlan(fourStageCfg, 'scout', { useDshPatch: true });
+      assert.equal(sEnv.seatId, 'kimi');
+      assert.equal(sEnv.model, 'moonshot/kimi-k2');
+      assert.equal(sEnv.source, 'env');
+
+      const sArg = registry.resolveStagePlan(fourStageCfg, 'scout', { agent: 'dsh:magpie/top', useDshPatch: true });
+      assert.equal(sArg.seatId, 'dsh');
+      assert.equal(sArg.model, 'magpie/top');
+      assert.equal(sArg.source, 'arg');
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
+  t('v2.1.0 updateLineup / discoverAgents / syncPanelLineupToSeats：四阶段持久化与写穿边界保护', () => {
+    const syncRoot = mkTmp('v21-sync');
+
+    // 1) 座位表缺失时 syncPanelLineupToSeats 静默返回 missing 不抛错
+    const missRes = registry.syncPanelLineupToSeats(syncRoot, 'dispatch/seats.json', { scoutCommand: 'codex' });
+    assert.equal(missRes.ok, false);
+    assert.equal(missRes.synced, false);
+    assert.equal(missRes.reason, 'missing');
+
+    // 2) 越界路径安全拒绝不抛错
+    const escapeRes = registry.syncPanelLineupToSeats(syncRoot, '../outside.json', { scoutCommand: 'codex' });
+    assert.equal(escapeRes.ok, false);
+    assert.equal(escapeRes.synced, false);
+    assert.equal(escapeRes.reason, 'bad-path');
+
+    // 3) 初始座位表含手写 model_override 与历史 enabled:false 座位；面板全空默认值时不产生冗余写盘
+    const seatsAbs = path.join(syncRoot, 'dispatch', 'seats.json');
+    fs.mkdirSync(path.dirname(seatsAbs), { recursive: true });
+    fs.writeFileSync(seatsAbs, JSON.stringify({
+      version: 2,
+      default_backends: ['codex', 'claude'],
+      seats: [
+        { id: 'codex', kind: 'cli', command: 'codex', argv: ['exec'], enabled: true, model_override: 'preserve-custom-override' },
+        { id: 'claude', kind: 'cli', command: 'claude', argv: ['-p', '{payload}'], enabled: false },
+        { id: 'dsh', kind: 'cli', command: 'dsh', argv: ['{payload}'], enabled: false },
+      ],
+    }, null, 2) + '\n');
+    const beforeRaw = fs.readFileSync(seatsAbs, 'utf8');
+
+    const noopRes = registry.syncPanelLineupToSeats(syncRoot, 'dispatch/seats.json', {
+      scoutCommand: '',
+      scoutModel: '',
+      divergeCommand: '',
+      divergeModel: '',
+      divergeCount: '10',
+      divergeUseDeadEnds: 'true',
+      reviewVotes: '',
+      noveltyCommand: '',
+      noveltyModel: '',
+    });
+    assert.equal(noopRes.ok, true);
+    assert.equal(noopRes.synced, false);
+    assert.equal(fs.readFileSync(seatsAbs, 'utf8'), beforeRaw, '面板全空默认态不应触碰原 seats.json');
+
+    // 4) 面板非空四阶段写穿同步：自动补入 gemini/kimi 座位，更新 lineup + default_backends，严禁改动 model_override
+    const writeRes = registry.syncPanelLineupToSeats(syncRoot, 'dispatch/seats.json', {
+      scoutCommand: { get: () => 'gemini' },
+      scoutModel: { get: () => 'gemini-2.5-pro' },
+      divergeCommand: 'kimi',
+      divergeModel: 'sensenova/glm-5.2',
+      divergeCount: '18',
+      divergeUseDeadEnds: 'false',
+      reviewVotes: 'codex:gpt-5.4,claude:claude-sonnet-4-5',
+      noveltyCommand: 'claude',
+      noveltyModel: 'claude-opus-4-1',
+    });
+    assert.equal(writeRes.ok, true);
+    assert.equal(writeRes.synced, true);
+
+    const syncedJson = JSON.parse(fs.readFileSync(seatsAbs, 'utf8'));
+    assert.equal(syncedJson.seats[0].model_override, 'preserve-custom-override', '严禁触碰手写 model_override');
+    assert.equal(syncedJson.seats.find((s) => s.id === 'claude').enabled, true, 'syncPanelLineupToSeats 选中的既有停用座位应自动置为 enabled: true');
+    assert.equal(syncedJson.seats.find((s) => s.id === 'dsh').enabled, false, '未被面板选中的停用座位保持原状');
+    assert.ok(syncedJson.seats.some((s) => s.id === 'gemini') && syncedJson.seats.some((s) => s.id === 'kimi' && s.argv.includes('text')));
+    assert.deepEqual(syncedJson.lineup, {
+      scout: { seat: 'gemini', model: 'gemini-2.5-pro' },
+      diverge: { seat: 'kimi', model: 'sensenova/glm-5.2', count: 18, use_dead_ends: false },
+      review: [
+        { seat: 'codex', model: 'gpt-5.4' },
+        { seat: 'claude', model: 'claude-sonnet-4-5' },
+      ],
+      novelty: { seat: 'claude', model: 'claude-opus-4-1' },
+    });
+    assert.deepEqual(syncedJson.default_backends, ['codex', 'claude']);
+
+    // 相同快照二次同步应返回 synced: false（零无谓写盘）
+    const idempRes = registry.syncPanelLineupToSeats(syncRoot, 'dispatch/seats.json', {
+      scoutCommand: 'gemini',
+      scoutModel: 'gemini-2.5-pro',
+      divergeCommand: 'kimi',
+      divergeModel: 'sensenova/glm-5.2',
+      divergeCount: '18',
+      divergeUseDeadEnds: 'false',
+      reviewVotes: 'codex:gpt-5.4,claude:claude-sonnet-4-5',
+      noveltyCommand: 'claude',
+      noveltyModel: 'claude-opus-4-1',
+    });
+    assert.equal(idempRes.ok, true);
+    assert.equal(idempRes.synced, false);
+
+    // 5) updateLineup 与 discoverAgents 完整覆盖四阶段读写、停用座自动激活与 reset
+    registry.updateLineup(syncRoot, {
+      scout: 'dsh:magpie/auto/qwen3-coder',
+      diverge: 'gemini:gemini-2.5-flash',
+      divergeCount: 12,
+      useDeadEnds: true,
+      review: 'codex:gpt-5.4,kimi:sensenova/glm-5.2',
+      novelty: 'kimi:sensenova/glm-5.2',
+      requireUniqueModels: true,
+    });
+    const afterUpdateJson = JSON.parse(fs.readFileSync(seatsAbs, 'utf8'));
+    assert.equal(afterUpdateJson.seats.find((s) => s.id === 'dsh').enabled, true, '被选入 lineup 的既有停用座位应自动置为 enabled: true');
+    const disc = registry.discoverAgents(syncRoot, { useDshPatch: false });
+    assert.equal(disc.ok, true);
+    assert.deepEqual(disc.lineup.scout, { seat: 'dsh', model: 'magpie/auto/qwen3-coder' });
+    assert.deepEqual(disc.lineup.diverge, { seat: 'gemini', model: 'gemini-2.5-flash', count: 12, use_dead_ends: true });
+    assert.equal(disc.lineup.review.length, 2);
+    assert.deepEqual(disc.lineup.novelty, { seat: 'kimi', model: 'sensenova/glm-5.2' });
+    assert.equal(disc.lineup.require_unique_models, true);
+
+    registry.updateLineup(syncRoot, { reset: true });
+    const discReset = registry.discoverAgents(syncRoot, { useDshPatch: false });
+    assert.equal(discReset.lineup.scout, null);
+    assert.equal(discReset.lineup.diverge, null);
+    assert.equal(discReset.lineup.review, null);
+    assert.equal(discReset.lineup.novelty, null);
+    assert.equal(discReset.lineup.require_unique_models, false);
   });
 
 } finally {

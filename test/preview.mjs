@@ -1,4 +1,4 @@
-// 设置页静态预览生成器（v2.0.0）：把真实组件树序列化成静态 HTML，复用同一份 CSS 渲染。
+// 设置页静态预览生成器（v2.1.0）：把真实组件树序列化成静态 HTML，复用同一份 CSS 渲染。
 //
 //   node test/preview.mjs   → test/preview.html
 //
@@ -38,40 +38,61 @@ mod.__test.setLiveGroups([
   { id: 'magpie-anthropic', name: 'Magpie · Anthropic', models: [{ id: 'zcode/GLM-5.3-Flash', name: 'GLM 5.3-Flash · ZCode' }] },
 ]);
 
-// 展示 v2.0.0 全自由编排：同工具多票（codex:gpt-5 + codex:o3）+ 含 gemini 候选 + 非 kimi 发散联动。
+// 展示 v2.1.0 五大分区（工作流项目 → 文献调研 → 想法发散 → 多票评审 → 前置查重）与五类 CLI 编排。
 const VALUE = {
-  repoRoot: '/workspace/project',
+  repoRoot: '/workspace/my-research',
   seatsFile: 'dispatch/seats.json',
+  scoutCommand: 'gemini',
+  scoutModel: 'gemini-2.5-pro',
+  divergeCommand: 'kimi',
+  divergeModel: 'kimi-k2-thinking',
+  divergeCount: '10',
+  divergeUseDeadEnds: 'true',
+  reviewVotes: 'codex:gpt-5,codex:o3,claude:claude-sonnet-4-5,dsh:qoder/deepseek-v4-pro',
+  noveltyCommand: 'claude',
+  noveltyModel: 'claude-sonnet-4-5',
+  executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5|claude-opus-4-1;dsh:qoder/deepseek-v4-pro;gemini:gemini-2.5-pro|gemini-2.5-flash;kimi:kimi-k2-thinking',
+  executorStatus: 'codex:1;claude:1;dsh:1;gemini:1;kimi:1',
   otherStages: '',
   stageOpinions: '',
-  reviewVotes: 'codex:gpt-5,codex:o3,claude:claude-sonnet-4-5,gemini:gemini-2.5-pro',
-  executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5|claude-opus-4-1;dsh:jiyuan/glm-5.3;gemini:gemini-2.5-pro|gemini-2.5-flash;api:deepseek-chat;kimi:sensenova/kimi-k3',
-  divergeCommand: 'claude',
-  divergeModel: 'claude-sonnet-4-5',
 };
 const SCHEMA = {
-  uid: 76,
+  uid: 90,
   refs: {
-    3: { type: 'string', meta: { description: '工作流项目根目录（含 dispatch/ 与 ideas/）', default: '/workspace/project' } },
+    3: { type: 'string', meta: { description: '科研项目文件夹路径', default: '/workspace/my-research' } },
     7: { type: 'string', meta: { description: '座位表相对路径；默认 dispatch/seats.json', default: 'dispatch/seats.json' } },
-    15: { type: 'string', meta: { description: '历史兼容字段', default: '' } },
-    19: { type: 'string', meta: { description: '历史兼容字段', default: '' } },
-    23: { type: 'string', meta: { description: '评审票（可自由增删，支持同工具多票）', default: '' } },
-    27: { type: 'string', meta: { description: '只读：本机探测到的执行者与模型目录', default: '' } },
-    31: { type: 'string', meta: { description: '发散环节执行者', default: '' } },
-    35: { type: 'string', meta: { description: '发散环节模型名', default: '' } },
-    76: {
+    11: { type: 'string', meta: { description: '文献调研环节执行工具', default: '' } },
+    13: { type: 'string', meta: { description: '文献调研环节模型名', default: '' } },
+    17: { type: 'string', meta: { description: '想法发散环节执行工具', default: '' } },
+    21: { type: 'string', meta: { description: '想法发散环节模型名', default: '' } },
+    25: { type: 'string', meta: { description: '想法发散单轮默认产出条数', default: '10' } },
+    29: { type: 'string', meta: { description: '想法发散历史死胡同过滤', default: 'true' } },
+    33: { type: 'string', meta: { description: '评审票（可自由增删，支持同工具多票）', default: '' } },
+    37: { type: 'string', meta: { description: '前置查重环节执行工具', default: '' } },
+    41: { type: 'string', meta: { description: '前置查重环节模型名', default: '' } },
+    45: { type: 'string', meta: { description: '只读：本机探测到的工具与模型目录', default: '' } },
+    49: { type: 'string', meta: { description: '只读：本机探测到的工具安装状态', default: '' } },
+    53: { type: 'string', meta: { description: '历史兼容字段', default: '' } },
+    57: { type: 'string', meta: { description: '历史兼容字段', default: '' } },
+    90: {
       type: 'object',
       meta: { default: {} },
       dict: {
         repoRoot: 3,
         seatsFile: 7,
-        otherStages: 15,
-        stageOpinions: 19,
-        reviewVotes: 23,
-        executorCatalog: 27,
-        divergeCommand: 31,
-        divergeModel: 35,
+        scoutCommand: 11,
+        scoutModel: 13,
+        divergeCommand: 17,
+        divergeModel: 21,
+        divergeCount: 25,
+        divergeUseDeadEnds: 29,
+        reviewVotes: 33,
+        noveltyCommand: 37,
+        noveltyModel: 41,
+        executorCatalog: 45,
+        executorStatus: 49,
+        otherStages: 53,
+        stageOpinions: 57,
       },
     },
   },
@@ -132,7 +153,7 @@ function attr(k, v, tag) {
   if (tag === 'select' && k === 'value') return '';
   if (k === 'className') return ' class="' + esc(v) + '"';
   if (k === 'disabled') return v ? ' disabled' : '';
-  if (['value', 'placeholder', 'type', 'title', 'role', 'aria-hidden', 'aria-selected', 'aria-haspopup', 'aria-expanded'].includes(k)) {
+  if (['value', 'placeholder', 'type', 'min', 'max', 'title', 'role', 'aria-hidden', 'aria-selected', 'aria-haspopup', 'aria-expanded'].includes(k)) {
     return ' ' + k + '="' + esc(v) + '"';
   }
   return '';
@@ -176,15 +197,15 @@ const bodyHtml = ser(tree);
 const bodyHtmlNoGw = ser(treeNoGw);
 
 const demoGroups = mod.__test.groupedModels('dsh', [{ exec: 'dsh', models: [] }]);
-function demoPicker(q) {
-  const st = { menu: { key: 'demo', hi: 2, q }, setMenu() {} };
+function demoPicker(q, groups = demoGroups) {
+  const st = { menu: { key: 'demo', hi: q ? 0 : 3, q }, setMenu() {} };
   return mod.__test.ModelPicker(Object.assign(
-    { value: 'qoder/auto', groups: demoGroups, disabled: false, placeholder: '默认' },
-    mod.__test.menuProps(st, 'demo', demoGroups, 'qoder/auto', () => {}),
+    { value: 'qoder/auto', groups, disabled: false, placeholder: '默认' },
+    mod.__test.menuProps(st, 'demo', groups, 'qoder/auto', () => {}),
   ));
 }
 const demoHtml = ser(demoPicker(''));
-const demoHtmlFiltered = ser(demoPicker('qwen'));
+const demoHtmlFiltered = ser(demoPicker('qwen-custom-preview'));
 
 const LIGHT = [
   '--dsw-alias-bg-base:#fcfcfb;--dsw-alias-bg-layer-1:#fcfcfb;--dsw-alias-bg-layer-2:#f2f0e9;--dsw-alias-bg-layer-3:#f9f9f6',
@@ -197,7 +218,7 @@ const LIGHT = [
 const DARK = [
   '--dsw-alias-bg-base:#141413;--dsw-alias-bg-layer-1:#1c1b1a;--dsw-alias-bg-layer-2:#242320;--dsw-alias-bg-layer-3:#2e2c29',
   '--dsw-alias-border-l1:rgba(255,255,255,.09);--dsw-alias-border-l2:rgba(255,255,255,.14);--dsw-alias-border-l3:rgba(255,255,255,.30)',
-  '--dsw-alias-label-primary:#faf9f5;--dsw-alias-label-secondary:#b9b6ac;--dsw-alias-label-tertiary:#8c8a80',
+  '--dsw-alias-brand-primary:#faf9f5;--dsw-alias-label-primary:#faf9f5;--dsw-alias-label-secondary:#b9b6ac;--dsw-alias-label-tertiary:#8c8a80',
   '--dsw-alias-brand-primary:#d97757;--dsw-alias-button-primary-fill:#d97757;--dsw-alias-button-primary-hover:#e08a6d;--dsw-alias-button-primary-text:#141413',
   '--dsw-alias-state-danger-fg:#e0776a;--dsw-alias-state-success-fg:#79c08c',
   '--dsw-font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif',
@@ -205,7 +226,7 @@ const DARK = [
 
 const css = mod.__test.CSS();
 const html = '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
-  + '<title>科研派工 · 设置卡片预览</title><style>'
+  + '<title>科研派工 · 全流程阵容预览</title><style>'
   + '*{box-sizing:border-box}body{margin:0;padding:32px;background:#f3f1ea;font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif}'
   + '.wrap{display:grid;grid-template-columns:1fr 1fr;gap:24px;max-width:1720px;margin:0 auto}'
   + '.pane{border-radius:12px;padding:26px 28px 30px;min-height:560px;box-shadow:0 1px 2px rgba(0,0,0,.06)}'
@@ -217,16 +238,16 @@ const html = '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
   + '<div class="pane light"><p class="cap">Claude light</p>' + bodyHtml + '</div>'
   + '<div class="pane dark"><p class="cap">Claude dark</p>' + bodyHtml + '</div>'
   + '</div><div class="wrap" style="margin-top:24px">'
-  + '<div class="pane light" style="grid-column:1 / span 2"><p class="cap">状态：连不上设置服务（控件禁用 + 恢复路径）</p>' + bodyHtmlNoGw + '</div>'
+  + '<div class="pane light" style="grid-column:1 / span 2"><p class="cap">状态：连不上设置服务（五分区骨架保留 + 控件禁用）</p>' + bodyHtmlNoGw + '</div>'
   + '</div>'
   + '<div class="wrap" style="margin-top:24px">'
-  + '<div class="pane light"><p class="cap">模型弹层 · 打开态（light）</p>'
-  + '<div style="position:relative;width:300px;height:400px">' + demoHtml + '</div>'
-  + '<p class="cap" style="margin-top:24px">同一弹层 · 输入 qwen 后</p>'
+  + '<div class="pane light"><p class="cap">模型弹层 · 打开态（含常驻默认项 + 搜索框）</p>'
+  + '<div style="position:relative;width:300px;height:420px">' + demoHtml + '</div>'
+  + '<p class="cap" style="margin-top:24px">同一弹层 · 输入自定义模型名后</p>'
   + '<div style="position:relative;width:300px;height:260px">' + demoHtmlFiltered + '</div></div>'
   + '<div class="pane dark"><p class="cap">模型弹层 · 打开态（dark）</p>'
-  + '<div style="position:relative;width:300px;height:400px">' + demoHtml + '</div>'
-  + '<p class="cap" style="margin-top:24px">同一弹层 · 输入 qwen 后</p>'
+  + '<div style="position:relative;width:300px;height:420px">' + demoHtml + '</div>'
+  + '<p class="cap" style="margin-top:24px">同一弹层 · 输入自定义模型名后</p>'
   + '<div style="position:relative;width:300px;height:260px">' + demoHtmlFiltered + '</div></div>'
   + '</div></body></html>\n';
 

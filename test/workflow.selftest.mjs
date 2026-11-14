@@ -1402,6 +1402,141 @@ try {
     assert.equal(rBadSort.rc, 1, '非法 --sort 值必须退 1');
   });
 
+  t('S8 [v2.1.0] 四阶段 lineup 编排 + stages/stage-exec/stage-model + scout & novelty CLI 全闭环', () => {
+    const v21Ws = mkTmp('v21-cli-loop');
+    const v21Topic = 'v21-loop';
+
+    // 1) init 创建 papers/novelty 目录
+    const rInit = runCli(v21Ws, ['init', '--topic', v21Topic]);
+    assert.equal(rInit.rc, 0, rInit.out);
+    assert.ok(fs.existsSync(path.join(v21Ws, 'papers', 'novelty')), 'init 应创建 papers/novelty 目录');
+
+    // 互斥参数拦截
+    const rConflict = runCli(v21Ws, ['lineup', '--use-dead-ends', '--no-dead-ends']);
+    assert.equal(rConflict.rc, 1, '--use-dead-ends 与 --no-dead-ends 同时指定应退 1');
+
+    // 2) 四阶段 lineup 一次性写入 scout / diverge(count=8, no-dead-ends) / review / novelty
+    const rLineup = runCli(v21Ws, [
+      'lineup',
+      '--scout', 'gemini:gemini-2.5-pro',
+      '--diverge', 'codex:gpt-5',
+      '--diverge-count', '8',
+      '--no-dead-ends',
+      '--review', 'codex:gpt-5,claude:claude-sonnet-4-5',
+      '--novelty', 'claude:claude-sonnet-4-5',
+      '--json',
+    ]);
+    assert.equal(rLineup.rc, 0, rLineup.out);
+    const luJson = JSON.parse(rLineup.stdout);
+    assert.deepEqual(luJson.lineup.scout, { seat: 'gemini', model: 'gemini-2.5-pro' });
+    assert.deepEqual(luJson.lineup.diverge, { seat: 'codex', model: 'gpt-5', count: 8, use_dead_ends: false });
+    assert.deepEqual(luJson.lineup.novelty, { seat: 'claude', model: 'claude-sonnet-4-5' });
+
+    // 3) stages / stage-exec / stage-model 四阶段全对齐
+    const rStages = runCli(v21Ws, ['stages']);
+    assert.equal(rStages.rc, 0, rStages.out);
+    const stagesArr = JSON.parse(rStages.stdout);
+    assert.deepEqual(stagesArr.map((s) => s.stage), ['scout', 'diverge', 'review', 'novelty']);
+    assert.equal(runCli(v21Ws, ['stage-exec', 'scout']).stdout.trim(), 'gemini');
+    assert.equal(runCli(v21Ws, ['stage-model', 'scout']).stdout.trim(), 'gemini-2.5-pro');
+    assert.equal(runCli(v21Ws, ['stage-exec', 'diverge']).stdout.trim(), 'codex');
+    assert.equal(runCli(v21Ws, ['stage-model', 'diverge']).stdout.trim(), 'gpt-5');
+    assert.equal(runCli(v21Ws, ['stage-exec', 'review']).stdout.trim(), 'codex,claude');
+    assert.equal(runCli(v21Ws, ['stage-exec', 'novelty']).stdout.trim(), 'claude');
+    assert.equal(runCli(v21Ws, ['stage-model', 'novelty']).stdout.trim(), 'claude-sonnet-4-5');
+
+    // 4) 挂载本地无联网 Mock CLI 实跑 scout → diverge(继承 count=8 & no-dead-ends) → briefs → novelty
+    const mockWorker = path.join(v21Ws, 'mock-v21-worker.mjs');
+    fs.writeFileSync(mockWorker, [
+      'import fs from "node:fs";',
+      'const role = process.env.V21_MOCK_ROLE || "";',
+      'if (role === "scout") {',
+      '  process.stdout.write([',
+      '    "=== CARD: latex-first-2026.md ===",',
+      '    "```yaml",',
+      '    "paper_id: latex-first-2026",',
+      '    "title: \\"LaTeX Source Priority for Literature Grounding\\"",',
+      '    "venue: ICLR",',
+      '    "code_url: https://github.com/example/latex-first",',
+      '    "abstract_zh: \\"利用 arXiv e-print 源码抽取精确公式锚点，避免双栏 PDF 断行失真。\\"",',
+      '    "intro_key: \\"PDF OCR 会破坏上下标与表格对齐。\\"",',
+      '    "relevance: \\"为本轮 S0 自动建卡提供高质量文献底座。\\"",',
+      '    "```",',
+      '  ].join("\\n"));',
+      '} else if (role === "diverge") {',
+      '  process.stdout.write([',
+      '    "### idea_01 基于源码锚点的验证段门控",',
+      '    "- 假设：在配对验证段引入源码级结构门控可将 ValSet 准确率提升 +1.40pp。",',
+      '    "- 做法：保持主干与采样超参不变，仅替换验证段门控权重计算。",',
+      '    "- 最小证伪实验：单卡 40 步先导对比测量同题配对增益。",',
+      '    "- 预测：ValSet 准确率从 78.00% 升至 79.40%（+1.40pp）。",',
+      '    "- 主读数：acc +1.40pp",',
+      '    "- 判据：2σ=0.60pp",',
+      '    "- 若失败说明什么：配对增益 < 0.60pp 说明门控未捕获有效信号。",',
+      '  ].join("\\n"));',
+      '} else if (role === "novelty") {',
+      '  process.stdout.write([',
+      '    "```yaml",',
+      '    "idea_id: \\"idea_01\\"",',
+      '    "duplication_risk: low",',
+      '    "closest_works:",',
+      '    "  - title: \\"LaTeX Source Priority for Literature Grounding\\"",',
+      '    "    venue: \\"ICLR\\"",',
+      '    "    year: 2026",',
+      '    "    url: \\"https://arxiv.org/abs/2601.12345\\"",',
+      '    "    overlap: \\"同属结构化锚点方向\\"",',
+      '    "    difference: \\"该文面向文献解析，未涉及 RL 验证段配对门控\\"",',
+      '    "polish: \\"在契约中锁定配对 2σ=0.60pp 门槛\\"",',
+      '    "note: \\"经 arXiv 与 Semantic Scholar 检索确认低撞车风险。\\"",',
+      '    "confidence: 0.88",',
+      '    "```",',
+      '  ].join("\\n"));',
+      '}',
+    ].join('\n'), 'utf8');
+
+    const cfg = JSON.parse(fs.readFileSync(path.join(v21Ws, 'dispatch', 'seats.json'), 'utf8'));
+    for (const id of ['gemini', 'codex', 'claude']) {
+      const s = cfg.seats.find((x) => x.id === id);
+      s.command = process.execPath;
+      s.argv = [mockWorker, '-p', '{payload}'];
+      s.payload_position = 'argv';
+      s.output = 'stdout';
+      s.enabled = true;
+    }
+    fs.writeFileSync(path.join(v21Ws, 'dispatch', 'seats.json'), JSON.stringify(cfg, null, 2), 'utf8');
+
+    // 准备已签字 baseline 与一个故意放入的 dead-ends.md（验证 lineup no-dead-ends 生效）
+    const bDir = path.join(v21Ws, 'baselines', 'b1');
+    fs.mkdirSync(bDir, { recursive: true });
+    fs.writeFileSync(path.join(bDir, 'BRIEF_BLOCK.md'), [
+      '### Baseline 锚点（baselines/b1）',
+      '- 模型与数据集：Qwen-Math-1.5B on ValSet (N=1000, 8 rollouts/item)',
+      '- 已验收主指标：acc = 78.00%（配对标准误 ±0.30%，2σ = 0.60pp，详见 REPRO.md §3）',
+      '- 训练预算与控制条件：单卡 A100 训练 40 steps，lr=1e-6，temperature=0.7，seed=42，严禁修改评测分母或采样轮数。',
+    ].join('\n') + '\n', 'utf8');
+    fs.writeFileSync(path.join(bDir, 'REPRO.md'), '## 3. 关键指标\n| metric | 论文报告 | 我复现 | 容差 | 判定 |\n|---|---|---|---|---|\n| acc | 78.0 | 78.0 | ±0.3 | ok |\n## 4. 人验收签字\nSIGNOFF: PASS\n', 'utf8');
+    fs.writeFileSync(path.join(v21Ws, 'ideas', v21Topic, 'dead-ends.md'), '- DEAD_END_IGNORED_BY_LINEUP\n', 'utf8');
+
+    const rScout = runCli(v21Ws, ['scout', 'LaTeX source priority', '1', '--pool'], { V21_MOCK_ROLE: 'scout' });
+    assert.equal(rScout.rc, 0, 'scout --pool 应退 0：\n' + rScout.out);
+    assert.ok(fs.existsSync(path.join(v21Ws, 'papers', 'cards', 'latex-first-2026.md')));
+    assert.ok(fs.existsSync(path.join(v21Ws, 'papers', 'cards', '_pool.md')));
+
+    const rDiv = runCli(v21Ws, ['diverge', '结构化锚点配对门控', '--topic', v21Topic, '--baseline', 'baselines/b1'], { V21_MOCK_ROLE: 'diverge' });
+    assert.equal(rDiv.rc, 0, 'diverge 应退 0：\n' + rDiv.out);
+    const rawFile = fs.readdirSync(path.join(v21Ws, 'ideas', v21Topic)).find((f) => f.startsWith('raw-') && f.endsWith('.md'));
+    const rawHead = fs.readFileSync(path.join(v21Ws, 'ideas', v21Topic, rawFile), 'utf8').split('\n')[0];
+    assert.ok(rawHead.includes('requested=8') && !rawHead.includes('dead_ends_sha='), '应继承 lineup 的 count=8 与 no-dead-ends：' + rawHead);
+
+    const rBriefs = runCli(v21Ws, ['briefs', 'ideas/' + v21Topic + '/' + rawFile, '--topic', v21Topic, '--baseline', 'baselines/b1']);
+    assert.equal(rBriefs.rc, 0, rBriefs.out);
+
+    const rNov = runCli(v21Ws, ['novelty', 'idea_01', '--topic', v21Topic], { V21_MOCK_ROLE: 'novelty' });
+    assert.equal(rNov.rc, 0, 'novelty idea_01 应退 0：\n' + rNov.out);
+    assert.ok(fs.existsSync(path.join(v21Ws, 'papers', 'novelty', 'idea_01.md')));
+    assert.equal(runCli(v21Ws, ['check-novelty', 'papers/novelty/idea_01.md']).rc, 0);
+  });
+
 } finally {
   for (const d of TMP_DIRS) {
     try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* 忽略清理异常 */ }

@@ -4,9 +4,15 @@
     "require_unique_models": false
   },
   "lineup": {
-    "diverge": {
+    "scout": {
       "seat": "codex",
       "model": ""
+    },
+    "diverge": {
+      "seat": "codex",
+      "model": "",
+      "count": 10,
+      "use_dead_ends": true
     },
     "review": [
       {
@@ -17,7 +23,11 @@
         "seat": "claude",
         "model": ""
       }
-    ]
+    ],
+    "novelty": {
+      "seat": "claude",
+      "model": ""
+    }
   },
   "paths": {
     "cards_dir": "ideas/cards",
@@ -103,7 +113,7 @@
     {
       "id": "dsh",
       "kind": "cli",
-      "enabled": false,
+      "enabled": true,
       "command": "dsh",
       "argv": [
         "--profile",
@@ -131,7 +141,7 @@
     {
       "id": "gemini",
       "kind": "cli",
-      "enabled": false,
+      "enabled": true,
       "command": "gemini",
       "argv": [
         "-p",
@@ -156,6 +166,38 @@
         "default_file": "~/.gemini/settings.json",
         "pattern": "\"model\"\\s*:\\s*\"[^\"]*\"",
         "cut_field": 4
+      }
+    },
+    {
+      "id": "kimi",
+      "kind": "cli",
+      "enabled": true,
+      "command": "kimi",
+      "argv": [
+        "-p",
+        "{payload}",
+        "--output-format",
+        "text",
+        "{optional_args}"
+      ],
+      "payload_position": "argv",
+      "output": "stdout",
+      "optional_args": [
+        {
+          "env": "KIMI_MODEL",
+          "argv": [
+            "-m",
+            "{env}"
+          ]
+        }
+      ],
+      "identity": {
+        "kind": "config",
+        "explicit_env": "KIMI_MODEL",
+        "file_env": "KIMI_CFG",
+        "default_file": "~/.kimi/config.toml",
+        "pattern": "^(?:default_model|model)\\s*=\\s*\"[^\"]*\"",
+        "cut_field": 2
       }
     },
     {

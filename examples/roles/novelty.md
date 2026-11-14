@@ -23,7 +23,7 @@
 
 整份输出**只能包含一个 `yaml` 代码块**（代码块前后不得附带超过 30 个字符的额外散文，否则会被 `npx research-dispatch check-novelty` 判定格式违规拦截）。
 
-保存文件名须以 `<idea_id>.md` 或 `novelty-<idea_id>.md` 命名（例如 `ideas/<topic>/novelty-idea_01.md`），其中 `idea_id` 必须与文件名一致：
+保存文件名须以 `<idea_id>.md` 或 `novelty-<idea_id>.md` 命名（例如 `npx research-dispatch novelty <工单路径或ID> [--topic <slug>]` 默认落盘至 `papers/novelty/<idea_id>.md` 并自动运行 `check-novelty` 闸门），其中 `idea_id` 必须与文件名一致：
 
 ```yaml
 idea_id: "idea_01"

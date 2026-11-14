@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// 全链路纯 Node 普适研究流水线 CLI 主入口（v2.0.0）：
-// 覆盖一键初始化、跨宿主 Agent/模型探测、自由阵容编排、文献成池、基线监控、
-// 挂载负知识库的候选发散、自包含盲审拆单、仓外隔离多 Agent 评审、横向对比总表、
-// 前置查重、Pilot 配对 2σ 统计检验以及实验与消融契约哈希冻结。
+// 全链路纯 Node 普适研究流水线 CLI 主入口（v2.1.0）：
+// 覆盖一键初始化、跨宿主 Agent/模型探测、四阶段自由阵容编排（scout / diverge / review / novelty）、
+// S0 文献调研派工与成池、S1 基线监控、S2 双模式候选发散、S3 自包含盲审拆单、
+// S4 仓外隔离多 Agent 评审与五维排序总表、S4.5 前置查重派工与 Pilot 2σ 统计检验、S5 状态盘面、S6 契约冻结。
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
-import { run, runDiverge } from '../lib/run.mjs';
+import { run, runDiverge, runScout, runNovelty } from '../lib/run.mjs';
+import * as registryMod from '../lib/registry.mjs';
 import {
   loadConfig,
   findSeat,
@@ -162,20 +163,42 @@ function parseBoolToken(val) {
   return null;
 }
 
+function resolveStage(cfg, stageName, opts = {}) {
+  if (typeof registryMod.resolveStagePlan === 'function') {
+    return registryMod.resolveStagePlan(cfg, stageName, opts);
+  }
+  return resolveDivergePlan(cfg, opts);
+}
+
+function formatStageLineupEntry(stObj, fallbackText = '默认（按配置）') {
+  if (!stObj) return fallbackText;
+  if (typeof stObj === 'string') return stObj;
+  const base = stObj.model ? (stObj.seat + ':' + stObj.model) : (stObj.seat || fallbackText);
+  const extras = [];
+  if (stObj.count !== undefined && stObj.count !== null) extras.push('count=' + stObj.count);
+  if (stObj.use_dead_ends !== undefined && stObj.use_dead_ends !== null) {
+    extras.push('use_dead_ends=' + Boolean(stObj.use_dead_ends));
+  }
+  return extras.length ? (base + ' (' + extras.join(', ') + ')') : base;
+}
+
 const USAGE = [
   '用法: research-dispatch <子命令> [参数]',
   '',
   '  初始化与阵容编排：',
   '    init [目录] [--force] [--topic <slug>]       在项目目录生成跨宿主研究流水线骨架（AGENTS.md / seats.json / 模板）',
   '    agents [--json]                              探测本机已安装的 CLI Agent、API 环境变量及可用模型目录',
-  '    lineup [--review <spec>] [--diverge <spec>]  查看或持久化更新项目 dispatch/seats.json 的评审与发散阵容',
-  '           [--reset] [--require-unique-models] [--json]',
+  '    lineup [--scout <spec>] [--diverge <spec>]   查看或持久化更新项目 dispatch/seats.json 的四阶段阵容与发散策略',
+  '           [--diverge-count <N>] [--use-dead-ends | --no-dead-ends]',
+  '           [--review <spec>] [--novelty <spec>] [--reset] [--require-unique-models] [--json]',
   '',
   '  全链路科研流水线（S0 → S6）：',
+  '    scout <调研方向> [篇数=5] [--cards <dir>]    [S0] 派工文献调研（LaTeX/Markdown 优先），逐张校验文献卡',
+  '          [--agent <seat[:model]>] [--pool] [--dry]',
   '    check-paper <card.md> [--json]               [S0] 校验单张文献卡 YAML 结构与必填字段',
   '    pool [--cards <dir>] [--out <file>] [--dry]  [S0] 汇总合格文献卡生成 _pool.md（坏卡移入 rejected/）',
   '    repro-watch <baseline_dir> [--log <file>]    [S1] 校验基线数据哈希与复现训练日志心跳',
-  '    diverge <方向> [条数=10] [--topic <slug>]    [S2] 调用选定 Agent 结合文献池、基线与可选 dead-ends.md 发散候选',
+  '    diverge <方向> [条数] [--topic <slug>]       [S2] 调用选定 Agent 结合文献池、基线与可选 dead-ends.md 发散候选',
   '            [--baseline <dir>] [--pool <file>] [--dead-ends <file> | --no-dead-ends] [--agent <seat[:model]>] [--dry]',
   '    briefs <raw.md> [--topic <slug>]             [S3] 校验溯源与单条自包含性，拆分为盲审工单',
   '           [--baseline <dir>] [--out <dir>] [--force] [--allow-reanchor]',
@@ -184,6 +207,8 @@ const USAGE = [
   '    summary [--topic <slug>] [--out <file>]      [S4] 生成跨工单各票裁决、五维均分排序与核心理由对比总表 _summary.md',
   '            [--sort rank|id] [--no-write] [--json]',
   '    status [--topic <slug>] [--json]             [S5] 盘点待人工写 verdict-<id>.md 或未派工的工单',
+  '    novelty <工单路径或ID> [--topic <slug>]      [S4.5] 推式单单隔离派工前置查重并自动运行 check-novelty 闸门',
+  '            [--pool <file>] [--out <file>] [--agent <seat[:model]>] [--dry]',
   '    check-novelty <report.md> [--json]           [S4.5] 校验入围候选的前置新颖度查重报告',
   '    pilot-stats <armA> <armB>                    [S4.5] 计算 Pilot 双臂配对准确率、2σ MDE 与合规子集偏差',
   '                [--compliant-field <k>] [--json]',
@@ -191,7 +216,7 @@ const USAGE = [
   '                   [--re-record --reason <text>]',
   '',
   '  底层诊断与模型工具：',
-  '    seats | review-models | stages | stage-exec <环节> | stage-model <环节>',
+  '    seats | review-models | stages | stage-exec <scout|diverge|review|novelty> | stage-model <scout|diverge|review|novelty>',
   '    norm-model <串> | model-family <串> | dsh-live | dsh-tag | qoder-tag | qoder-self',
   '    seat-token <座位> | argv <座位> | resolve-model <显式> <配置文件> <正则> <字段>',
   '',
@@ -281,13 +306,14 @@ export async function main(argv) {
       const revStr = Array.isArray(res.lineup.review) && res.lineup.review.length > 0
         ? res.lineup.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat)).join(', ')
         : res.lineup.default_backends.join(', ');
-      const divObj = res.lineup.diverge;
-      const divStr = divObj
-        ? (typeof divObj === 'string' ? divObj : (divObj.model ? (divObj.seat + ':' + divObj.model) : divObj.seat))
-        : '默认（按配置）';
+      const scoutStr = formatStageLineupEntry(res.lineup.scout, '默认（跟随发散/配置）');
+      const divStr = formatStageLineupEntry(res.lineup.diverge, '默认（按配置）');
+      const novStr = formatStageLineupEntry(res.lineup.novelty, '默认（跟随发散/配置）');
       process.stdout.write('\n当前项目阵容 (' + res.config + ')：\n');
-      process.stdout.write('  评审 (review) : ' + revStr + '\n');
+      process.stdout.write('  调研 (scout)  : ' + scoutStr + '\n');
       process.stdout.write('  发散 (diverge): ' + divStr + '\n');
+      process.stdout.write('  评审 (review) : ' + revStr + '\n');
+      process.stdout.write('  查重 (novelty): ' + novStr + '\n');
       process.stdout.write('  强制异构门禁  : ' + (res.lineup.require_unique_models ? '开启 (require_unique_models=true)' : '关闭 (默认允许同模型自由组合)') + '\n');
     }
     return 0;
@@ -295,25 +321,47 @@ export async function main(argv) {
 
   // ── 3) lineup ───────────────────────────────────────────────────────────
   if (cmd === 'lineup') {
-    // 兼容 `--require-unique-models`（无值视为 true）与 `--require-unique-models false`（显式传布尔串）
+    // 兼容布尔选项带显式 true/false 参数值（如 `--require-unique-models false`、`--use-dead-ends false`）
     const normRest = [];
     for (let i = 0; i < rest.length; i++) {
       const tok = String(rest[i]);
-      if (tok === '--require-unique-models' && i + 1 < rest.length && parseBoolToken(rest[i + 1]) !== null) {
-        normRest.push('--require-unique-models=' + rest[i + 1]);
+      if ((tok === '--require-unique-models' || tok === '--use-dead-ends') && i + 1 < rest.length && parseBoolToken(rest[i + 1]) !== null) {
+        normRest.push(tok + '=' + rest[i + 1]);
         i += 1;
       } else {
         normRest.push(tok);
       }
     }
     const p = parseCliFlags(normRest, {
-      booleans: ['reset', 'json', 'require-unique-models', 'no-require-unique-models'],
-      strings: ['review', 'diverge'],
+      booleans: ['reset', 'json', 'require-unique-models', 'no-require-unique-models', 'use-dead-ends', 'no-dead-ends'],
+      strings: ['scout', 'diverge', 'diverge-count', 'review', 'novelty'],
     });
     if (!p.ok) {
       process.stderr.write('✗ ' + p.error + '\n');
       return 1;
     }
+    if (p.flags['use-dead-ends'] === true && p.flags['no-dead-ends'] === true) {
+      process.stderr.write('✗ --use-dead-ends 与 --no-dead-ends 不能同时指定\n');
+      return 1;
+    }
+
+    let divergeCount;
+    if (p.flags['diverge-count'] !== undefined) {
+      const n = Number(p.flags['diverge-count']);
+      if (!Number.isInteger(n) || n < 1 || n > 50) {
+        process.stderr.write('✗ --diverge-count 必须是 1..50 的整数，实得: ' + JSON.stringify(p.flags['diverge-count']) + '\n');
+        return 1;
+      }
+      divergeCount = n;
+    }
+
+    let useDeadEnds;
+    if (p.flags['no-dead-ends']) {
+      useDeadEnds = false;
+    } else if (p.flags['use-dead-ends'] !== undefined) {
+      useDeadEnds = Boolean(p.flags['use-dead-ends']);
+    }
+
     let requireUniqueModels;
     if (p.flags['no-require-unique-models']) {
       requireUniqueModels = false;
@@ -321,15 +369,23 @@ export async function main(argv) {
       requireUniqueModels = Boolean(p.flags['require-unique-models']);
     }
 
-    const hasMutation = p.flags.review !== undefined
+    const hasMutation = p.flags.scout !== undefined
       || p.flags.diverge !== undefined
+      || divergeCount !== undefined
+      || useDeadEnds !== undefined
+      || p.flags.review !== undefined
+      || p.flags.novelty !== undefined
       || Boolean(p.flags.reset)
       || requireUniqueModels !== undefined;
 
     if (hasMutation) {
       const updated = updateLineup(root, {
-        review: p.flags.review,
+        scout: p.flags.scout,
         diverge: p.flags.diverge,
+        divergeCount,
+        useDeadEnds,
+        review: p.flags.review,
+        novelty: p.flags.novelty,
         reset: Boolean(p.flags.reset),
         requireUniqueModels,
       });
@@ -337,52 +393,104 @@ export async function main(argv) {
         process.stdout.write(JSON.stringify(updated, null, 2) + '\n');
       } else {
         process.stdout.write('✓ 已更新项目阵容配置: ' + updated.file + '\n');
-        const rev = (updated.lineup && Array.isArray(updated.lineup.review))
-          ? updated.lineup.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat)).join(', ')
+        const ln = updated.lineup || {};
+        const rev = Array.isArray(ln.review)
+          ? ln.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat)).join(', ')
           : updated.default_backends.join(', ');
-        const div = (updated.lineup && updated.lineup.diverge)
-          ? (updated.lineup.diverge.model ? (updated.lineup.diverge.seat + ':' + updated.lineup.diverge.model) : updated.lineup.diverge.seat)
-          : '默认（按配置）';
+        process.stdout.write('  调研座位 (scout)  : ' + formatStageLineupEntry(ln.scout, '默认（跟随发散/配置）') + '\n');
+        process.stdout.write('  发散座位 (diverge): ' + formatStageLineupEntry(ln.diverge, '默认（按配置）') + '\n');
         process.stdout.write('  评审阵容 (review) : ' + rev + '\n');
-        process.stdout.write('  发散座位 (diverge): ' + div + '\n');
+        process.stdout.write('  查重座位 (novelty): ' + formatStageLineupEntry(ln.novelty, '默认（跟随发散/配置）') + '\n');
         process.stdout.write('  require_unique_models: ' + String(Boolean(updated.policy && updated.policy.require_unique_models)) + '\n');
       }
       return 0;
     }
 
     const cfg = loadConfig(root);
-    const planRes = resolveExecutionPlan(cfg);
+    const scoutRes = resolveStage(cfg, 'scout');
     const divRes = resolveDivergePlan(cfg);
+    const planRes = resolveExecutionPlan(cfg);
+    const novRes = resolveStage(cfg, 'novelty');
     const out = {
       config: cfg.__file,
       source: planRes.source,
       require_unique_models: Boolean(cfg.policy && cfg.policy.require_unique_models === true),
+      scout: scoutRes.ok ? { source: scoutRes.source, seat: scoutRes.seatId, model: scoutRes.model || '' } : { error: scoutRes.error },
+      diverge: divRes.ok ? {
+        source: divRes.source,
+        seat: divRes.seatId,
+        model: divRes.model || '',
+        count: divRes.defaultCount ?? 10,
+        use_dead_ends: divRes.defaultUseDeadEnds !== false,
+      } : { error: divRes.error },
       review: planRes.ok ? planRes.slots : [],
-      diverge: divRes.ok ? { source: divRes.source, seat: divRes.seatId, model: divRes.model || '' } : { error: divRes.error },
+      novelty: novRes.ok ? { source: novRes.source, seat: novRes.seatId, model: novRes.model || '' } : { error: novRes.error },
       ...(planRes.ok ? {} : { error: planRes.error }),
     };
     if (p.flags.json) {
       process.stdout.write(JSON.stringify(out, null, 2) + '\n');
     } else {
       process.stdout.write('当前生效阵容 (' + cfg.__file + ')：\n');
+      if (scoutRes.ok) {
+        process.stdout.write('  调研 (source=' + scoutRes.source + '): '
+          + scoutRes.seatId + (scoutRes.model ? (':' + scoutRes.model) : '') + '\n');
+      } else {
+        process.stderr.write('  ✗ 调研配置异常: ' + scoutRes.error + '\n');
+      }
+      if (divRes.ok) {
+        process.stdout.write('  发散 (source=' + divRes.source + '): '
+          + divRes.seatId + (divRes.model ? (':' + divRes.model) : '')
+          + ' [count=' + (divRes.defaultCount ?? 10) + ', use_dead_ends=' + String(divRes.defaultUseDeadEnds !== false) + ']\n');
+      } else {
+        process.stderr.write('  ✗ 发散配置异常: ' + divRes.error + '\n');
+      }
       if (planRes.ok) {
         process.stdout.write('  评审 (source=' + planRes.source + '): '
           + planRes.slots.map((s) => (s.model ? (s.tag + '[' + s.seat + ':' + s.model + ']') : s.tag)).join(', ') + '\n');
       } else {
         process.stderr.write('  ✗ 评审计划异常: ' + planRes.error + '\n');
       }
-      if (divRes.ok) {
-        process.stdout.write('  发散 (source=' + divRes.source + '): '
-          + divRes.seatId + (divRes.model ? (':' + divRes.model) : '') + '\n');
+      if (novRes.ok) {
+        process.stdout.write('  查重 (source=' + novRes.source + '): '
+          + novRes.seatId + (novRes.model ? (':' + novRes.model) : '') + '\n');
       } else {
-        process.stderr.write('  ✗ 发散配置异常: ' + divRes.error + '\n');
+        process.stderr.write('  ✗ 查重配置异常: ' + novRes.error + '\n');
       }
       process.stdout.write('  require_unique_models: ' + String(out.require_unique_models) + '\n');
     }
-    return planRes.ok && divRes.ok ? 0 : 2;
+    return planRes.ok && divRes.ok && scoutRes.ok && novRes.ok ? 0 : 2;
   }
 
-  // ── 4) check-paper & pool (S0) ──────────────────────────────────────────
+  // ── 4) scout / check-paper / pool (S0) ──────────────────────────────────
+  if (cmd === 'scout') {
+    const p = parseCliFlags(rest, {
+      booleans: ['pool', 'dry'],
+      strings: ['cards', 'out', 'agent'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (p.pos.length === 0) {
+      process.stderr.write('用法: dispatch.mjs scout <调研方向> [篇数=5] [--cards <dir>] [--agent <seat[:model]>] [--pool] [--dry]\n');
+      return 1;
+    }
+    if (p.pos.length > 2) {
+      process.stderr.write('!! scout 最多接受两个位置参数：<调研方向> [篇数]，多余参数：' + p.pos.slice(2).join(' ') + '\n');
+      return 1;
+    }
+    return await runScout({
+      root,
+      query: p.pos[0],
+      count: p.pos[1],
+      cardsDir: p.flags.cards,
+      outFile: p.flags.out,
+      agent: p.flags.agent,
+      assemblePool: Boolean(p.flags.pool),
+      dry: Boolean(p.flags.dry),
+    });
+  }
+
   if (cmd === 'check-paper') {
     const p = parseCliFlags(rest, { booleans: ['json'] });
     if (!p.ok) {
@@ -435,7 +543,7 @@ export async function main(argv) {
   // ── 5) diverge (S2) ─────────────────────────────────────────────────────
   if (cmd === 'diverge') {
     const p = parseCliFlags(rest, {
-      booleans: ['dry', 'no-baseline', 'no-dead-ends'],
+      booleans: ['dry', 'no-baseline', 'no-dead-ends', 'use-dead-ends'],
       strings: ['topic', 'baseline', 'pool', 'dead-ends', 'agent'],
     });
     if (!p.ok) {
@@ -444,6 +552,10 @@ export async function main(argv) {
     }
     if (p.flags['dead-ends'] !== undefined && p.flags['no-dead-ends']) {
       process.stderr.write('✗ --no-dead-ends 与 --dead-ends 不能同时指定（前者启用纯空白发散模式，后者显式挂载死胡同文件）\n');
+      return 1;
+    }
+    if (p.flags['use-dead-ends'] && p.flags['no-dead-ends']) {
+      process.stderr.write('✗ --use-dead-ends 与 --no-dead-ends 不能同时指定\n');
       return 1;
     }
     if (p.pos.length === 0) {
@@ -463,7 +575,8 @@ export async function main(argv) {
       noBaseline: Boolean(p.flags['no-baseline']),
       poolFile: p.flags.pool,
       deadEndsFile: p.flags['dead-ends'],
-      noDeadEnds: Boolean(p.flags['no-dead-ends']),
+      noDeadEnds: p.flags['no-dead-ends'] ? true : undefined,
+      useDeadEnds: p.flags['use-dead-ends'] ? true : undefined,
       agent: p.flags.agent,
       dry: Boolean(p.flags.dry),
     });
@@ -660,7 +773,35 @@ export async function main(argv) {
     return res.rc;
   }
 
-  // ── 9) check-novelty & pilot-stats (S4.5) ───────────────────────────────
+  // ── 9) novelty / check-novelty / pilot-stats (S4.5) ─────────────────────
+  if (cmd === 'novelty') {
+    const p = parseCliFlags(rest, {
+      booleans: ['dry'],
+      strings: ['topic', 'pool', 'out', 'agent'],
+    });
+    if (!p.ok) {
+      process.stderr.write('✗ ' + p.error + '\n');
+      return 1;
+    }
+    if (p.pos.length === 0) {
+      process.stderr.write('用法: dispatch.mjs novelty <工单路径或ID> [--topic <slug>] [--pool <file>] [--out <file>] [--agent <seat[:model]>] [--dry]\n');
+      return 1;
+    }
+    if (p.pos.length > 1) {
+      process.stderr.write('!! novelty 只接受单个工单路径或工单 ID，多余参数：' + p.pos.slice(1).join(' ') + '\n');
+      return 1;
+    }
+    return await runNovelty({
+      root,
+      brief: p.pos[0],
+      topic: p.flags.topic,
+      poolFile: p.flags.pool,
+      outFile: p.flags.out,
+      agent: p.flags.agent,
+      dry: Boolean(p.flags.dry),
+    });
+  }
+
   if (cmd === 'check-novelty') {
     const p = parseCliFlags(rest, { booleans: ['json'] });
     if (!p.ok) {
@@ -820,37 +961,117 @@ export async function main(argv) {
     return 0;
   }
 
-  if (cmd === 'stages') {
+  if (cmd === 'stages' || cmd === 'stage-exec' || cmd === 'stage-model') {
+    let cfg = null;
+    try { cfg = loadConfig(root); } catch { cfg = null; }
     const ov = dshOverrides({ forceProfileRead: true }).config || {};
-    const raw = String(ov.stageOpinions || '');
-    const rows = raw.split(';').map((t) => t.trim()).filter(Boolean).map((t) => {
-      const [stage, executor, ...tail] = t.split(':');
-      return {
-        stage: (stage || '').trim(),
-        executor: (executor || '').trim(),
-        model: tail.join(':').trim(),
+
+    const parseOvVotes = (rawVotes) => String(rawVotes || '')
+      .split(/[;,]/)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .map((t) => {
+        const idx = t.indexOf(':');
+        return idx >= 0
+          ? { executor: t.slice(0, idx).trim(), model: t.slice(idx + 1).trim() }
+          : { executor: t, model: '' };
+      })
+      .filter((x) => x.executor);
+
+    const resolveDiagnosticStage = (st) => {
+      if (cfg) {
+        if (st === 'review') {
+          const rp = resolveExecutionPlan(cfg);
+          if (!rp.ok) return { stage: 'review', executor: '', model: '', slots: [], source: rp.source || 'error' };
+          return {
+            stage: 'review',
+            executor: rp.slots.map((s) => s.seat).join(','),
+            model: rp.slots.map((s) => s.model || '').filter(Boolean).join(','),
+            slots: rp.slots,
+            source: rp.source,
+          };
+        }
+        if (st === 'diverge') {
+          const dp = resolveDivergePlan(cfg);
+          return {
+            stage: 'diverge',
+            executor: dp.ok ? dp.seatId : '',
+            model: dp.ok ? (dp.model || '') : '',
+            count: dp.defaultCount ?? 10,
+            use_dead_ends: dp.defaultUseDeadEnds !== false,
+            source: dp.source || 'default',
+          };
+        }
+        if (st === 'scout' || st === 'novelty') {
+          const sp = resolveStage(cfg, st);
+          return {
+            stage: st,
+            executor: sp.ok ? sp.seatId : '',
+            model: sp.ok ? (sp.model || '') : '',
+            source: sp.source || 'default',
+          };
+        }
+      }
+
+      const legacyOp = (stageKey) => {
+        for (const seg of String(ov.stageOpinions || '').split(';')) {
+          const [k, ex, ...tail] = seg.trim().split(':');
+          if ((k || '').trim() === stageKey && (ex || '').trim()) {
+            return { executor: ex.trim(), model: tail.join(':').trim() };
+          }
+        }
+        return { executor: '', model: '' };
       };
-    });
-    process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
-    return 0;
-  }
+      if (st === 'scout') {
+        const fb = legacyOp('scout');
+        return { stage: 'scout', executor: String(ov.scoutCommand || '').trim() || fb.executor, model: String(ov.scoutModel || '').trim() || fb.model };
+      }
+      if (st === 'diverge') {
+        const fb = legacyOp('diverge');
+        return { stage: 'diverge', executor: String(ov.divergeCommand || '').trim() || fb.executor, model: String(ov.divergeModel || '').trim() || fb.model };
+      }
+      if (st === 'review') {
+        const vs = parseOvVotes(ov.reviewVotes);
+        return {
+          stage: 'review',
+          executor: vs.map((v) => v.executor).join(','),
+          model: vs.map((v) => v.model).filter(Boolean).join(','),
+        };
+      }
+      if (st === 'novelty') {
+        const fb = legacyOp('novelty');
+        return { stage: 'novelty', executor: String(ov.noveltyCommand || '').trim() || fb.executor, model: String(ov.noveltyModel || '').trim() || fb.model };
+      }
+      const fbOther = legacyOp(st);
+      return { stage: st, executor: fbOther.executor, model: fbOther.model };
+    };
 
-  if (cmd === 'stage-exec') {
-    const stage = rest[0] || '';
-    const ov = dshOverrides({ forceProfileRead: true }).config || {};
-    const map = { diverge: 'divergeCommand' };
-    const field = map[stage];
-    process.stdout.write((field ? String(ov[field] || '').trim() : '') + '\n');
-    return 0;
-  }
+    if (cmd === 'stages') {
+      if (cfg || ov.scoutCommand || ov.divergeCommand || ov.reviewVotes || ov.noveltyCommand) {
+        const rows = ['scout', 'diverge', 'review', 'novelty'].map((s) => resolveDiagnosticStage(s));
+        process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
+        return 0;
+      }
+      const raw = String(ov.stageOpinions || '');
+      const rows = raw.split(';').map((t) => t.trim()).filter(Boolean).map((t) => {
+        const [stage, executor, ...tail] = t.split(':');
+        return {
+          stage: (stage || '').trim(),
+          executor: (executor || '').trim(),
+          model: tail.join(':').trim(),
+        };
+      });
+      process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
+      return 0;
+    }
 
-  if (cmd === 'stage-model') {
-    const stage = rest[0] || '';
-    const ov = dshOverrides({ forceProfileRead: true }).config || {};
-    const map = { diverge: 'divergeModel' };
-    const field = map[stage];
-    const v = field ? String(ov[field] || '').trim() : '';
-    process.stdout.write((v || '') + '\n');
+    const stage = String(rest[0] || '').trim();
+    const info = resolveDiagnosticStage(stage);
+    if (cmd === 'stage-exec') {
+      process.stdout.write((info.executor || '') + '\n');
+      return 0;
+    }
+    process.stdout.write((info.model || '') + '\n');
     return 0;
   }
 

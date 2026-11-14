@@ -35,4 +35,4 @@ intro_key: "<该工作针对的具体痛点与核心切入机制，1-2 句>"
 relevance: "<与当前研究问题的直接关联或边界差异，1 句>"
 ```
 
-写完卡片后运行 `npx research-dispatch pool` 即可自动完成逐卡结构校验（`check-paper`）并拼装 `papers/cards/_pool.md`。
+写完卡片后运行 `npx research-dispatch pool`（或直接通过 `npx research-dispatch scout "<调研方向>" [篇数] --pool` 派工调研并自动切卡校验入池）即可完成逐卡结构校验（`check-paper`）并拼装 `papers/cards/_pool.md`。

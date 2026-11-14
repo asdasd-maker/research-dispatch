@@ -1,7 +1,7 @@
 {
   "name": "research-dispatch",
-  "version": "2.0.0",
-  "description": "Universal pure-Node AI research workflow engine: literature pool, baseline repro, dead-end-aware divergence, out-of-repo isolated multi-agent review, paired pilot statistics, and frozen experiment contracts across Antigravity, Claude Code, Codex, Cursor, and DeepSeek Harness.",
+  "version": "2.1.0",
+  "description": "Universal pure-Node AI research workflow engine (v2.1.0): 4-stage multi-agent orchestration (literature scout, blank-slate or dead-end-aware diverge, isolated blind review with ranked 5D summary, and pre-contract novelty), paired pilot stats, and frozen contracts across Antigravity, Claude Code, Codex, Cursor, Kimi Code, Gemini CLI, and DeepSeek Harness.",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -23,6 +23,7 @@
     "bin/",
     "skills/",
     "examples/",
+    "docs/",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -39,6 +40,7 @@
     "codex",
     "cursor",
     "gemini-cli",
+    "kimi-code",
     "deepseek-harness",
     "dsh-plugin",
     "ablation-contract",

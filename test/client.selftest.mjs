@@ -1,22 +1,23 @@
-// 设置页自检：无浏览器、无真 React、无网络。
+// 设置页与宿主层离线自检（v2.1.0）：无浏览器、无真 React、无网络。
 //   node plugin/research-dispatch/test/client.selftest.mjs
 //
-// 这把尺子的判据：
-//   · schema 用**真实形状** —— schemastery 的 toJSON() 是 { uid, refs }，没有 properties 键；
-//   · 不 grep 源码，能真调用的都真调用（readModelDirectories / mergeCatalog / catalogOf / fieldsOf）；
-//   · 渲染断言用带状态的极简 hook，页面能真的走到"连上 / 命名空间缺失 / 连不上"三条分支；
-//   · 验证宿主侧 apply() 零落盘（不改写 seats.json，默认不往 ~/.dsh 写诊断垃圾日志）。
+// 覆盖契约：
+//   · schema 用真实形状 —— schemastery 的 toJSON() 是 { uid, refs }，覆盖全部 15 个字段；
+//   · 五大分区按科研闭环顺序排布：工作流项目 → 文献调研 → 想法发散 → 多票评审 → 前置查重；
+//   · 五合一真实 CLI 列表（codex / claude / dsh / gemini / kimi，移除 api 与幻影 subagent，兼容旧配置切走）；
+//   · ModelPicker 彻底根治空模型死锁：常驻顶部搜索/自定义输入框、首项常驻恢复默认、0 模型可手输自定义回车选用；
+//   · 宿主 apply() + loader/volatile-update 自动写穿同步 lineup 至 dispatch/seats.json，且绝不触碰手写 model_override。
 import { pathToFileURL } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-// 这三条环境变量会把宿主侧读的座位表/设置文档改到别处，自检里必须干净。
+// 清理可能干扰路径解析的环境变量
 delete process.env.DSH_DISPATCH_ROOT;
 delete process.env.DSH_DISPATCH_CONFIG;
 delete process.env.DSH_DISPATCH_SETTINGS;
 
-// ── 极简 React：useState 有真状态，useEffect 手动 flush，setTimeout 关掉 ────
+// ── 极简 React：useState 有真状态，useEffect 手动 flush，3 秒超时短路 ────
 const hookState = [];
 let hookCursor = 0;
 let pendingEffects = [];
@@ -32,7 +33,6 @@ const fakeReact = {
   useEffect(fn) { pendingEffects.push(fn); },
   useSyncExternalStore(_s, get) { return get(); },
 };
-// 页面里那个 3 秒超时不该把自检进程拖住
 const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms) => (ms >= 3000 ? 0 : realSetTimeout(fn, ms));
 globalThis.clearTimeout = () => {};
@@ -53,10 +53,8 @@ const mod = reg.factory((id) => (id === 'react' ? fakeReact : (() => { throw new
 ok(JSON.stringify(mod.inject) === JSON.stringify(['slots', 'remote', 'remote.settings']),
   'inject 恰好是 ["slots","remote","remote.settings"]（多声明拿不到的服务会让 entry 永久 pending）');
 const viaGet = await mod.__test.readDescriptor({ get: (n) => (n === 'remote' ? { settings: { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', value: { a: 1 } }] } }) } } : undefined) });
-ok(viaGet && viaGet.ns === 'research-dispatch', 'ctx.get("remote") 这条兜底路径也能读到描述');
+ok(viaGet && viaGet.ns === 'research-dispatch', 'ctx.get("remote") 兜底路径可读到描述');
 
-// 首选路径：ctx.get("remote.settings") —— 与 ctx.get("remote") 同一条反射 API，
-// 绕开 "cannot get property remote.settings without inject" 的属性门禁（实测错误原文）。
 {
   const api = { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', value: { a: 1 } }] } }) };
   const viaSub = await mod.__test.readDescriptor({ get: (n) => (n === 'remote.settings' ? api : undefined) });
@@ -65,13 +63,11 @@ ok(viaGet && viaGet.ns === 'research-dispatch', 'ctx.get("remote") 这条兜底�
 {
   const pkgJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const deps = (pkgJson.dsh && pkgJson.dsh.client && pkgJson.dsh.client.inject) || [];
-  ok(deps.includes('@deepseek-ai/dsh-client-ui-settings'), '包级 dsh.client.inject 声明了设置域客户端（模块依赖没声明 → 服务永远等不到）');
+  ok(deps.includes('@deepseek-ai/dsh-client-ui-settings'), '包级 dsh.client.inject 声明了设置域客户端');
   ok(pkgJson.dsh.client.platform === 'web', '包级平台声明为 web');
 }
 
-// ── 回归：cordis 对未声明服务的读取是抛异常，不是 undefined ─────────
-// 实测错误原文：cannot get property "remote" without inject —— 上一版把探针写在
-// 注册之前，这个异常直接打断了注册，于是设置页整项消失。
+// ── 回归：cordis 对未声明服务的读取抛异常时不打断注册 ───────────────────
 {
   let reg2 = null;
   const trapCtx = {
@@ -84,8 +80,8 @@ ok(viaGet && viaGet.ns === 'research-dispatch', 'ctx.get("remote") 这条兜底�
   });
   let threw = false;
   try { mod.apply(trapCtx); } catch { threw = true; }
-  ok(!threw, 'ctx.remote 抛异常时 apply 不往外抛（否则整个 entry 挂掉）');
-  ok(!!reg2 && reg2.slot === 'settings.section', 'ctx.remote 抛异常也不影响设置页注册（注册先于探针）');
+  ok(!threw, 'ctx.remote 抛异常时 apply 不往外抛');
+  ok(!!reg2 && reg2.slot === 'settings.section', 'ctx.remote 抛异常也不影响设置页注册');
 }
 
 // ── 注册 ──────────────────────────────────────────────────────────
@@ -98,43 +94,40 @@ mod.apply(ctx);
 ok(registered && registered.slot === 'settings.section', '注册进 settings.section');
 ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科研派工', 'section id 与左栏标题');
 
-// ── 已声明 remote.settings 时，直接走属性（守卫放行） ─────────────────
 {
   const api = { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', value: { a: 2 } }] } }) };
   const direct = await mod.__test.readDescriptor({ remote: { settings: api }, get: () => undefined });
-  ok(direct && direct.ns === 'research-dispatch', '已声明时 ctx.remote.settings 直接可用（走属性而非 get）');
+  ok(direct && direct.ns === 'research-dispatch', '已声明时 ctx.remote.settings 直接可用');
 }
 
-// ── 模型清单：真调用，不 grep 源码 ─────────────────────────────────
+// ── 模型清单与五合一执行者座位（移除 api，换入 kimi）──────────────────
 {
-  const cat = mod.__test.catalogOf({ executorCatalog: 'codex:gpt-6.1-sol|gpt-6.1-mini;claude:opus;dsh:' });
-  ok(JSON.stringify(cat) === JSON.stringify([
-    { exec: 'codex', models: ['gpt-6.1-sol', 'gpt-6.1-mini'] },
-    { exec: 'claude', models: ['opus'] },
-    { exec: 'dsh', models: [] },
-  ]), 'catalogOf 把宿主探测串解析成 [{exec, models}]（不是写死的两个名字）');
+  const cat = mod.__test.catalogOf({ executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5;dsh:;gemini:gemini-2.5-pro;kimi:kimi-k2-thinking' });
+  ok(cat.length === 5 && cat[0].exec === 'codex' && cat[4].exec === 'kimi',
+    'catalogOf 解析五类 CLI 探测串');
 
-  // 运行时清单：假 modelDirectories 服务给出 provider→models，合并后同名去重
+  const stMap = mod.__test.statusOf({ executorStatus: 'codex:1;claude:1;dsh:1;gemini:0;kimi:1' });
+  ok(stMap.codex === true && stMap.gemini === false && stMap.kimi === true,
+    'statusOf 解析 executorStatus 安装标记（1→true, 0→false）');
+
   mod.__test.resetModelDirs();
-  const snap = { providers: [{ id: 'codex', models: [{ id: 'gpt-6.1-sol' }, { id: 'gpt-9-runtime' }] }, { id: 'kimi', models: [{ id: 'sensenova/kimi-k3' }] }] };
+  const snap = { providers: [{ id: 'codex', models: [{ id: 'gpt-5' }, { id: 'gpt-9-runtime' }] }, { id: 'kimi', models: [{ id: 'kimi-latest' }] }] };
   const dirs = mod.__test.readModelDirectories({ get: (n) => (n === 'modelDirectories' ? { getSnapshot: () => snap } : undefined) });
-  ok(dirs.codex && dirs.codex.includes('gpt-9-runtime'), 'readModelDirectories 从 modelDirectories 服务读出运行时可用的模型');
+  ok(dirs.codex && dirs.codex.includes('gpt-9-runtime'), 'readModelDirectories 读出运行时模型');
   const merged = mod.__test.mergeCatalog(cat, dirs);
   const codexRow = merged.find((c) => c.exec === 'codex');
   const kimiRow = merged.find((c) => c.exec === 'kimi');
-  ok(codexRow.models.filter((m) => m === 'gpt-6.1-sol').length === 1, '合并时同名去重（gpt-6.1-sol 只出现一次）');
-  ok(codexRow.models.includes('gpt-9-runtime'), '运行时模型并进了已有的执行者行');
-  ok(!!kimiRow && kimiRow.models.includes('sensenova/kimi-k3'), '静态目录里没有的执行者也新增成一行（不是二选一）');
+  ok(codexRow.models.filter((m) => m === 'gpt-5').length === 1, '合并时同名去重');
+  ok(codexRow.models.includes('gpt-9-runtime') && kimiRow.models.includes('kimi-latest'), '运行时模型并进对应执行者行');
 
-  // 拿不到服务时如实记诊断，不静默
   mod.__test.resetModelDirs();
   const none = mod.__test.readModelDirectories({ get: () => { throw new Error('no such service'); } });
-  ok(JSON.stringify(none) === '{}', 'modelDirectories 抛错时返回空表而不是崩掉');
-  ok(!!(globalThis.window.__researchDispatch || {}).modelDirsError, '拿不到时把原因记进诊断（__researchDispatch.modelDirsError）');
+  ok(JSON.stringify(none) === '{}', 'modelDirectories 抛错时返回空表');
+  ok(!!(globalThis.window.__researchDispatch || {}).modelDirsError, '异常记入诊断');
   mod.__test.resetModelDirs();
 }
 
-// ── dsh / subagent 的模型清单 = /model 弹窗那份（不是只有落了盘的 cline-pass）──
+// ── dsh 目录覆盖 & STAGE_SEATS 五合一无 api / subagent ────────────────
 {
   mod.__test.resetModelDirs();
   mod.__test.resetLiveCatalog();
@@ -145,43 +138,40 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
     { id: 'magpie-anthropic', name: 'Magpie · Anthropic', models: [{ id: 'zcode/GLM-5.3-Flash', name: 'GLM 5.3-Flash' }] },
   ];
   const ids = mod.__test.groupsToCatalog(groups);
-  ok(ids.length === 5, 'groups 平铺成 5 个 provider/model id（实际 ' + ids.length + '）');
+  ok(ids.length === 5, 'groups 平铺成 5 个 provider/model id');
   ok(ids.includes('qoder/auto') && ids.includes('magpie/auto/deepseek-v4.1-flash')
     && ids.includes('magpie-anthropic/zcode/GLM-5.3-Flash') && ids.includes('cline-pass/qwen3.8-max'),
-    '四组供应商都在（Cline Pass / Qoder / Magpie / Magpie·Anthropic），不是只剩 cline-pass');
-  ok(mod.__test.groupsToCatalog([{ id: 'x', models: [{ id: 'a' }, { id: 'a' }] }]).length === 1, '同一 id 去重');
+    '四组供应商都在（含多层斜杠路由模型）');
 
-  const staticValue = { executorCatalog: 'codex:gpt-6.1-sol;claude:opus;dsh:cline-pass/old-a|cline-pass/old-b;subagent:cline-pass/old-a;kimi:sensenova/kimi-k3' };
+  const staticValue = { executorCatalog: 'codex:gpt-5;claude:opus;dsh:cline-pass/old-a;subagent:cline-pass/old-a;api:deepseek-chat;kimi:kimi-k2' };
   const noCtx = { get: () => undefined };
 
-  // 没拿到宿主目录时：退回静态探测（旧行为，别把降级说成修好了）
   const fallback = mod.__test.panelCatalog(staticValue, noCtx).find((c) => c.exec === 'dsh');
-  ok(fallback && fallback.models.includes('cline-pass/old-a'), '拿不到宿主目录时退回静态探测（不是空清单）');
+  ok(fallback && fallback.models.includes('cline-pass/old-a'), '拿不到宿主目录时退回静态探测');
 
-  // 拿到宿主目录后：dsh 行以宿主目录为准，幻影 subagent 被过滤剔除
   mod.__test.setLiveGroups(groups);
   const patched = mod.__test.panelCatalog(staticValue, noCtx);
   const dsh = patched.find((c) => c.exec === 'dsh');
   const sub = patched.find((c) => c.exec === 'subagent');
+  const apiEntry = patched.find((c) => c.exec === 'api');
+  const expectedSeats = ['codex', 'claude', 'dsh', 'gemini', 'kimi'];
   ok(dsh && dsh.models.length === 5 && !dsh.models.includes('cline-pass/old-a'),
-    'dsh 行以宿主目录为准（旧的 cline-pass/old-a 已被覆盖，不是并集）');
-  ok(!sub && JSON.stringify(mod.__test.REVIEW_SEATS) === JSON.stringify(['codex', 'claude', 'dsh', 'gemini', 'api'])
-    && JSON.stringify(mod.__test.DIVERGE_SEATS) === JSON.stringify(['codex', 'claude', 'dsh', 'gemini', 'api', 'kimi']),
-    '面板过滤掉不存在座位的幻影 subagent，评审支持 5 座（含 gemini）、发散全解锁 6 座');
-  ok(patched.find((c) => c.exec === 'codex').models.includes('gpt-6.1-sol')
-    && patched.find((c) => c.exec === 'kimi').models.includes('sensenova/kimi-k3'),
-    'codex / kimi 这些外部 CLI 座位不受影响（只覆盖 dsh）');
-  ok((globalThis.window.__researchDispatch || {}).liveCatalog === undefined
-    || typeof globalThis.window.__researchDispatch.liveCatalog === 'string',
-    '宿主目录命中时诊断里记下分组（__researchDispatch.liveCatalog）');
+    'dsh 行以宿主目录为准');
+  ok(!sub && !apiEntry
+    && JSON.stringify(mod.__test.STAGE_SEATS) === JSON.stringify(expectedSeats)
+    && JSON.stringify(mod.__test.REVIEW_SEATS) === JSON.stringify(expectedSeats)
+    && JSON.stringify(mod.__test.DIVERGE_SEATS) === JSON.stringify(expectedSeats),
+    '五合一清晰 Agent 列表：STAGE_SEATS / REVIEW_SEATS / DIVERGE_SEATS 均为 [codex,claude,dsh,gemini,kimi]，剔除 api 与 subagent');
+  ok(patched.find((c) => c.exec === 'codex').models.includes('gpt-5')
+    && patched.find((c) => c.exec === 'kimi').models.includes('kimi-k2'),
+    'codex / kimi 外部 CLI 座位不受 dsh 覆盖影响');
 
-  // 复位后回到静态，证明"覆盖"不是把状态写死
   mod.__test.resetLiveCatalog();
   ok(mod.__test.panelCatalog(staticValue, noCtx).find((c) => c.exec === 'dsh').models.includes('cline-pass/old-a'),
-    '复位后回到静态探测（覆盖不是一次性卡死）');
+    '复位后回到静态探测');
 }
 
-// ── 下拉风格：按供应商分组、只写模型名（与 /model 弹窗同一形态）──────────
+// ── ModelPicker（v2.1.0）：常驻输入框 + 常驻恢复默认项 + 0 模型手输自定义不死锁 ──
 {
   mod.__test.resetModelDirs();
   mod.__test.resetLiveCatalog();
@@ -189,81 +179,16 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
     { id: 'cline-pass', name: 'Cline Pass', models: [{ id: 'qwen3.8-max', name: 'Qwen 3.8 Max' }] },
     { id: 'qoder', name: 'Qoder (订阅)', models: [{ id: 'auto', name: 'Auto' }, { id: 'deepseek-v4-pro', name: 'deepseek V4-Pro' }] },
   ];
-  const cat = [{ exec: 'dsh', models: [] }, { exec: 'codex', models: ['gpt-6.1-sol'] }];
+  const cat = [{ exec: 'dsh', models: [] }, { exec: 'codex', models: ['gpt-5'] }];
   const flat = mod.__test.groupedModels('dsh', cat);
   ok(flat.length === 1 && flat[0].label === '' && flat[0].items.length === 0,
-    '没拿到宿主目录时 dsh 的模型组为空（不编造一份假分组）');
+    '没拿到宿主目录时 dsh 预设组为空');
 
   mod.__test.setLiveGroups(groups);
   const grouped = mod.__test.groupedModels('dsh', cat);
   ok(grouped.length === 2 && grouped[0].label === 'Cline Pass' && grouped[1].label === 'Qoder (订阅)',
-    '按供应商分组，组名用人能读的 provider 名（实际 ' + grouped.map((g) => g.label).join('|') + '）');
-  ok(grouped[0].items[0].label === 'Qwen 3.8 Max' && grouped[0].items[0].value === 'cline-pass/qwen3.8-max',
-    '选项显示模型名，值是 provider/model（显示与存储分开）');
-  const codexRow = mod.__test.groupedModels('codex', cat);
-  ok(codexRow.length === 1 && codexRow[0].label === '' && codexRow[0].items[0].value === 'gpt-6.1-sol',
-    '外部 CLI 执行者不分组（它们本来就没有供应商层级）');
+    '按供应商分组展示');
 
-  // ── 渲染层：自造弹层，形态与 /model 弹窗一致 ──────────────────────
-  const kids = (n) => (n && n.props ? [].concat(n.props.children || []).flat(Infinity).filter(Boolean) : []);
-  const txt = (n) => kids(n).map((x) => (typeof x === 'string' ? x
-    : (x && x.props ? [].concat(x.props.children || []).flat(Infinity).join('') : ''))).join('');
-  const pick = (state, value) => mod.__test.ModelPicker(Object.assign(
-    { value, groups: grouped, disabled: false, placeholder: '默认' },
-    mod.__test.menuProps(state, 'k1', grouped, value, (v) => picked.push(v)),
-  ));
-  const picked = [];
-  const st = { menu: { key: null, hi: 0 }, setMenu(v) { st.menu = v; } };
-
-  // 关闭态：一个按钮，文字是模型名，没有弹层
-  const closedTree = pick(st, 'qoder/auto');
-  ok(closedTree.type === 'div' && closedTree.props.className === 'rdp-pick', '外层 .rdp-pick 作为弹层定位锚点');
-  const btn = kids(closedTree)[0];
-  ok(btn.type === 'button' && /rdp-pick-btn/.test(btn.props.className), '关闭态是按钮（不是原生 select）');
-  ok(txt(btn).includes('Auto') && !txt(btn).includes('qoder/auto'), '按钮上写模型名「Auto」，不露 provider/model');
-  ok(!kids(closedTree).some((x) => (x.props || {}).className === 'rdp-menu'), '关闭态不渲染弹层');
-
-  // 打开态：胶囊标题 + 选项行 + 选中勾
-  st.menu = { key: 'k1', hi: 1 };
-  const openTree = pick(st, 'qoder/auto');
-  const menu = kids(openTree).find((x) => (x.props || {}).className === 'rdp-menu');
-  ok(!!menu, '打开态渲染 .rdp-menu 弹层');
-  const secs = kids(menu);
-  const caps = secs.map((s) => kids(s).filter((x) => /rdp-menu-cap/.test((x.props || {}).className || ''))[0]).filter(Boolean);
-  ok(caps.map((c) => txt(c)).join('|') === 'Cline Pass|Qoder (订阅)', '分组标题是深色胶囊，写供应商显示名（实际 ' + caps.map((c) => txt(c)).join('|') + '）');
-  const rows = secs.flatMap((s) => kids(s).filter((x) => /rdp-menu-item/.test((x.props || {}).className || '')));
-  ok(rows.length === 3, '两组合计 3 行（实际 ' + rows.length + '）');
-  const selRow = rows.filter((x) => x.props['aria-selected'] === 'true')[0];
-  ok(!!selRow && kids(selRow).some((x) => /rdp-menu-tick/.test((x.props || {}).className || '')), '当前选中的行带勾选标记');
-  ok(/is-hi/.test((rows[1].props.className || '')), '键盘高亮行有独立样式（is-hi）');
-  ok(txt(rows[1]) === 'Auto' + '✓', '行文本是模型名（勾选标记跟在后面）');
-
-  // 点一行 → 回传 provider/model（显示的是名字，存的是 id）
-  rows[2].props.onClick();
-  ok(picked[0] === 'qoder/deepseek-v4-pro' && st.menu.key === null, '点行回传 provider/model 并收起弹层');
-
-  // 键盘：↓ 移高亮、Esc 收、Enter 选中
-  st.menu = { key: null, hi: 0 };
-  kids(closedTree)[0].props.onKeyDown({ key: 'ArrowDown', preventDefault() {} });
-  ok(st.menu.key === 'k1' && st.menu.hi === 2, '关闭态按 ↓ 打开并把高亮移到当前值下一行（实际 ' + st.menu.hi + '）');
-  st.menu = { key: 'k1', hi: 2 };
-  // 重渲染一次：高亮下标是渲染时定下的，拿旧树的 onKeyDown 会选到旧的 hi 那一行。
-  const open2 = pick(st, 'qoder/auto');
-  kids(open2)[0].props.onKeyDown({ key: 'Enter', preventDefault() {} });
-  ok(picked[1] === 'qoder/deepseek-v4-pro' && st.menu.key === null, 'Enter 选中高亮行并收起');
-  st.menu = { key: 'k1', hi: 0 };
-  kids(openTree)[0].props.onKeyDown({ key: 'Escape', preventDefault() {} });
-  ok(st.menu.key === null, 'Esc 收起弹层');
-
-  // 已保存但不在目录里的模型：按钮显示原始 id，不许显示成"没选"
-  const goneTree = pick({ menu: { key: null, hi: 0 }, setMenu() {} }, 'gone/model');
-  ok(txt(kids(goneTree)[0]).includes('gone/model'), '不在目录里的已存值照原样显示（不被显示成未选）');
-  mod.__test.resetLiveCatalog();
-}
-
-// ── 弹层里的搜索框：>4 个模型才出现，不连续字符也算命中 ────────────────
-{
-  mod.__test.resetModelDirs();
   const kids = (n) => (n && n.props ? [].concat(n.props.children || []).flat(Infinity).filter(Boolean) : []);
   const txt = (n) => kids(n).map((x) => (typeof x === 'string' ? x
     : (x && x.props ? [].concat(x.props.children || []).flat(Infinity).join('') : ''))).join('');
@@ -281,78 +206,84 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
   const rowsOf = (n) => byClass(n, /(^|\s)rdp-menu-item(\s|$)/);
   const capsOf = (n) => byClass(n, /rdp-menu-cap/).map(txt);
 
-  const big = [
-    { id: 'cline-pass', name: 'Cline Pass', models: [{ id: 'qwen3.8-max', name: 'Qwen 3.8 Max' }, { id: 'qwen3.7-plus', name: 'Qwen 3.7 Plus' }] },
-    { id: 'qoder', name: 'Qoder (订阅)', models: [{ id: 'auto', name: 'Auto' }, { id: 'deepseek-v4-pro', name: 'deepseek V4-Pro' }] },
-    { id: 'magpie', name: 'Magpie', models: [{ id: 'auto/deepseek-v4.1-flash', name: 'deepseek V4.1-Flash · routing group' }] },
-  ];
-  const gs = [{ label: 'Cline Pass', items: [{ value: 'cline-pass/qwen3.8-max', label: 'Qwen 3.8 Max' }, { value: 'cline-pass/qwen3.7-plus', label: 'Qwen 3.7 Plus' }] },
-    { label: 'Qoder (订阅)', items: [{ value: 'qoder/auto', label: 'Auto' }, { value: 'qoder/deepseek-v4-pro', label: 'deepseek V4-Pro' }] },
-    { label: 'Magpie', items: [{ value: 'magpie/auto/deepseek-v4.1-flash', label: 'deepseek V4.1-Flash · routing group' }] }];
-  const st2 = { menu: { key: null, hi: 0, q: '' }, setMenu(v) { st2.menu = v; } };
-  const tree = (v) => mod.__test.ModelPicker(Object.assign(
-    { value: v, groups: gs, disabled: false, placeholder: '默认' },
-    mod.__test.menuProps(st2, 'k', gs, v, () => {}),
+  const picked = [];
+  const st = { menu: { key: null, hi: 0, q: '' }, setMenu(v) { st.menu = v; } };
+  const pick = (state, value, grp = grouped) => mod.__test.ModelPicker(Object.assign(
+    { value, groups: grp, disabled: false, placeholder: '默认' },
+    mod.__test.menuProps(state, 'k1', grp, value, (v) => picked.push(v)),
   ));
 
-  st2.menu = { key: null, hi: 0, q: '' };
-  ok(byClass(tree('qoder/auto'), /rdp-menu-search/).length === 0, '收起时没有搜索框');
-  st2.menu = { key: 'k', hi: 0, q: '' };
-  const openT = tree('qoder/auto');
-  const input = byClass(openT, /rdp-menu-search/)[0];
-  ok(!!input && input.type === 'input', '目录共 5 个模型（>4）→ 打开时出现搜索框');
-  ok(byClass(tree('qoder/auto'), /rdp-menu-cap/).length === 3, '未输入时三组全在');
+  // 关闭态
+  const closedTree = pick(st, 'qoder/auto');
+  ok(closedTree.type === 'div' && closedTree.props.className === 'rdp-pick', '外层 .rdp-pick 锚点');
+  const btn = kids(closedTree)[0];
+  ok(btn.type === 'button' && /rdp-pick-btn/.test(btn.props.className), '关闭态是按钮');
+  ok(txt(btn).includes('Auto') && !txt(btn).includes('qoder/auto'), '按钮显示模型友好名 Auto');
+  ok(byClass(closedTree, /rdp-menu-search/).length === 0, '关闭态不渲染弹层与输入框');
 
-  // 输入过滤：只剩 Qoder 一组，且高亮重置
-  input.props.onChange({ target: { value: 'qoder' } });
-  ok(st2.menu.q === 'qoder', '输入写进本弹层的查询串');
-  const afterQ = tree('qoder/auto');
-  ok(capsOf(afterQ).join('|') === 'Qoder (订阅)', '没有匹配的分组整组隐藏（实际 ' + capsOf(afterQ).join('|') + '）');
-  ok(rowsOf(afterQ).length === 2, '过滤后剩 2 行（实际 ' + rowsOf(afterQ).length + '）');
-  ok(rowsOf(afterQ).map(txt).join('|') === 'Auto✓|deepseek V4-Pro', '行文本仍是模型名，选中行带勾');
+  // 打开态（仅 3 个预设模型 ≤4）：依然常驻渲染顶部搜索兼自定义输入框 + 首项常驻「默认（使用该工具自身默认模型）」！
+  st.menu = { key: 'k1', hi: 2, q: '' };
+  const openTree = pick(st, 'qoder/auto');
+  const searchInSmall = byClass(openTree, /rdp-menu-search/);
+  ok(searchInSmall.length === 1 && String(searchInSmall[0].props.placeholder || '').includes('输入新模型名回车'),
+    '候选数 ≤4（3 个）时打开弹层也始终渲染顶部搜索/自定义输入框');
+  ok(capsOf(openTree).join('|') === 'Cline Pass|Qoder (订阅)', '供应商分组胶囊标题正常渲染');
+  const openRows = rowsOf(openTree);
+  ok(openRows.length === 4 && txt(openRows[0]).includes('默认（使用该工具自身默认模型）'),
+    '未输入过滤词时首项常驻「默认（使用该工具自身默认模型）」（1 默认 + 3 预设 = 4 行）');
+  const selRow = openRows.find((x) => x.props['aria-selected'] === 'true');
+  ok(!!selRow && txt(selRow) === 'Auto✓', '当前选中模型行带勾选标记');
 
-  // 匹配规则本身：不连续字符按顺序命中，无关字符不命中，大小写不敏感
-  ok(mod.__test.modelMatch({ label: 'deepseek V4-Pro', value: 'qoder/deepseek-v4-pro' }, 'dvp') === true,
-    '不连续字符 d→v→p 按顺序命中（与 /model 弹窗同一规则）');
-  ok(mod.__test.modelMatch({ label: 'Qwen 3.8 Max', value: 'cline-pass/qwen3.8-max' }, 'dvp') === false,
-    '顺序不对/缺字符就不命中（不是模糊包含）');
-  ok(mod.__test.modelMatch({ label: 'Auto', value: 'qoder/auto' }, '  QODER  ') === true,
-    '去首尾空格且不区分大小写');
+  // 点击首项常驻默认行 → 一键切回 ""（恢复该工具自身默认模型）
+  openRows[0].props.onClick();
+  ok(picked[0] === '' && st.menu.key === null, '点击首项常驻默认行可随时从具体模型一键恢复默认（""）');
 
-  // 过滤到一行：'v4-pro' 只可能命中 deepseek V4-Pro
-  input.props.onChange({ target: { value: 'v4-pro' } });
-  const afterSub = tree('qoder/auto');
-  ok(rowsOf(afterSub).length === 1 && txt(rowsOf(afterSub)[0]).indexOf('deepseek V4-Pro') === 0,
-    '过滤后只剩命中那一行（实际 ' + rowsOf(afterSub).map(txt).join('|') + '）');
+  // 键盘导航：关闭态按 ArrowDown 打开并移至当前值（index 2: qoder/auto）下一项（index 3: qoder/deepseek-v4-pro）
+  st.menu = { key: null, hi: 0, q: '' };
+  kids(closedTree)[0].props.onKeyDown({ key: 'ArrowDown', preventDefault() {} });
+  ok(st.menu.key === 'k1' && st.menu.hi === 3, '关闭态按 ↓ 打开并把高亮移到当前值下一行（index 3）');
+  const open2 = pick(st, 'qoder/auto');
+  kids(open2)[0].props.onKeyDown({ key: 'Enter', preventDefault() {} });
+  ok(picked[1] === 'qoder/deepseek-v4-pro' && st.menu.key === null, 'Enter 选中高亮行并收起');
 
-  // 无匹配：给一句提示，不是空弹层
-  input.props.onChange({ target: { value: 'zzzz' } });
-  const noneT = tree('qoder/auto');
-  ok(rowsOf(noneT).length === 0 && byClass(noneT, /rdp-menu-empty/).length === 1, '无匹配时给一句提示（不留空弹层）');
-
-  // 回车选中过滤后的第一行
-  const picked2 = [];
-  const st3 = { menu: { key: 'k', hi: 0, q: 'qoder' }, setMenu(v) { st3.menu = v; } };
-  const t3 = mod.__test.ModelPicker(Object.assign(
-    { value: '', groups: gs, disabled: false, placeholder: '默认' },
-    mod.__test.menuProps(st3, 'k', gs, '', (v) => picked2.push(v)),
+  // ── 0 模型空目录场景：彻底根治「没有匹配的模型」死锁 ──────────────────
+  const emptyGroups = [{ label: '', items: [] }];
+  const pickedCustom = [];
+  const stZero = { menu: { key: 'zero', hi: 0, q: '' }, setMenu(v) { stZero.menu = v; } };
+  const renderZero = (val = '') => mod.__test.ModelPicker(Object.assign(
+    { value: val, groups: emptyGroups, disabled: false, placeholder: '默认' },
+    mod.__test.menuProps(stZero, 'zero', emptyGroups, val, (v) => pickedCustom.push(v)),
   ));
-  byClass(t3, /rdp-menu-search/)[0].props.onKeyDown({ key: 'Enter', preventDefault() {} });
-  ok(picked2[0] === 'qoder/auto' && st3.menu.key === null, '列表被过滤后 Enter 选到的是过滤后的第一行（不是原始第一行）');
 
-  // 小目录（≤4）不给搜索框
-  const small = [{ label: '', items: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] }];
-  const st4 = { menu: { key: 'k', hi: 0, q: '' }, setMenu(v) { st4.menu = v; } };
-  const t4 = mod.__test.ModelPicker(Object.assign(
-    { value: 'a', groups: small, disabled: false, placeholder: '默认' },
-    mod.__test.menuProps(st4, 'k', small, 'a', () => {}),
+  const zeroOpen = renderZero('');
+  const zeroInput = byClass(zeroOpen, /rdp-menu-search/)[0];
+  ok(!!zeroInput, '0 个已探测模型时打开弹层也始终渲染顶部输入框（绝不锁死）');
+  ok(rowsOf(zeroOpen).length === 1 && txt(rowsOf(zeroOpen)[0]).includes('默认（使用该工具自身默认模型）'),
+    '0 个已探测模型时仍提供常驻默认项');
+
+  // 用户在 0 模型弹层输入自定义模型名并按回车
+  zeroInput.props.onChange({ target: { value: '  claude-opus-4-1-custom  ' } });
+  const zeroTyped = renderZero('');
+  const zeroRowsAfter = rowsOf(zeroTyped);
+  ok(zeroRowsAfter.length === 1 && txt(zeroRowsAfter[0]).includes('使用自定义模型：claude-opus-4-1-custom'),
+    '输入任意非空新模型名时出现「使用自定义模型：<q.trim()>」选项');
+  byClass(zeroTyped, /rdp-menu-search/)[0].props.onKeyDown({ key: 'Enter', preventDefault() {} });
+  ok(pickedCustom[0] === 'claude-opus-4-1-custom' && stZero.menu.key === null,
+    '0 模型下直接输入自定义模型名按 Enter 即刻写入并收起弹层');
+
+  // 当输入与现有候选 value 完全重名时，不重复生成「使用自定义模型」行
+  const stExact = { menu: { key: 'k1', hi: 0, q: 'qoder/auto' }, setMenu(v) { stExact.menu = v; } };
+  const exactTree = mod.__test.ModelPicker(Object.assign(
+    { value: '', groups: grouped, disabled: false, placeholder: '默认' },
+    mod.__test.menuProps(stExact, 'k1', grouped, '', () => {}),
   ));
-  ok(byClass(t4, /rdp-menu-search/).length === 0, '超过 4 个才给搜索框：2 个模型时没有搜索框');
+  ok(!rowsOf(exactTree).some((r) => txt(r).includes('使用自定义模型：')),
+    '输入与现有候选 value 完全重名时不重复追加自定义行');
 
-  // 关闭再打开：查询串必须清空（否则下次打开还带着上次的过滤词）
-  st2.menu = { key: 'k', hi: 0, q: 'qoder' };
-  mod.__test.menuProps(st2, 'k', gs, 'qoder/auto', () => {}).onClose();
-  ok(st2.menu.key === null && st2.menu.q === '', '收起时清空查询串');
+  // 不在目录里的已存自定义值在关闭态按钮上原样显示
+  const goneTree = pick({ menu: { key: null, hi: 0, q: '' }, setMenu() {} }, 'my-saved-custom-model');
+  ok(txt(kids(goneTree)[0]).includes('my-saved-custom-model'), '已保存的自定义模型在关闭态照原样显示');
+
   mod.__test.resetLiveCatalog();
 }
 
@@ -361,7 +292,6 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
   mod.__test.resetModelDirs();
   mod.__test.resetLiveCatalog();
   const deps = [];
-  let fired = 0;
   const api = { modelCatalog: async () => ({ ok: true, value: { groups: [{ id: 'magpie', name: 'Magpie', models: [{ id: 'auto/x', name: 'X' }] }] } }) };
   const ctx2 = {
     slots: { inject: (n, fn) => fn(), register: (d, c) => ({ def: d, comp: c }) },
@@ -370,88 +300,95 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
     effect: () => {},
   };
   let threw = false;
-  try { mod.apply(ctx2); } catch (e) { threw = true; }
+  try { mod.apply(ctx2); } catch { threw = true; }
   ok(!threw, 'ctx.inject 存在时 apply 不抛');
-  ok(deps.includes('remote.session'), '用可选光纤取 remote.session（不写进 inject，避免 entry 永久 pending）');
+  ok(deps.includes('remote.session'), '用可选光纤取 remote.session');
   await tick();
-  fired++;
   const dsh = mod.__test.panelCatalog({ executorCatalog: 'dsh:' }, { get: () => undefined }).find((c) => c.exec === 'dsh');
-  ok(!!dsh && dsh.models.includes('magpie/auto/x'), '光纤里拿到的目录真的进了面板清单（实际 ' + (dsh ? dsh.models.join('|') : 'none') + '）');
-  ok(typeof (globalThis.window.__researchDispatch || {}).liveCatalog === 'string', '命中时诊断记下分组（liveCatalog）');
+  ok(!!dsh && dsh.models.includes('magpie/auto/x'), '光纤里拿到的目录进了面板清单');
   mod.__test.resetLiveCatalog();
   mod.__test.resetModelDirs();
 }
 
-// ── ⑦ 两种"拿不到"必须可区分 ──────────────────────────────────────
+// ── 两种"拿不到"必须可区分 ──────────────────────────────────────────
 {
   const noGw = await mod.__test.readDescriptor({}).catch(() => 'THREW');
-  ok(noGw === null, '没有网关时 readDescriptor 返回 null（不是抛错）');
+  ok(noGw === null, '没有设置服务时 readDescriptor 返回 null');
   const apiNoNs = { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'other', value: {} }] } }) };
   let err = null;
   try { await mod.__test.readDescriptor({ remote: { settings: apiNoNs }, get: () => undefined }); } catch (e) { err = e; }
-  ok(!!err && err.code === 'NS_MISSING', 'describe 通了但没有本命名空间 → 抛 NS_MISSING（不是当成"连不上网关"）');
+  ok(!!err && err.code === 'NS_MISSING', 'describe 通了但无本命名空间 → 抛 NS_MISSING');
   let threw = false;
   try { await mod.__test.writePatch({}, {}); } catch (e) { threw = /设置服务/.test(String(e.message)); }
-  ok(threw, '连不上设置服务时 writePatch 显式报错（不是静默写丢）');
+  ok(threw, '连不上设置服务时 writePatch 显式报错');
 }
 
-// ── schema 的真实形状：schemastery 的 toJSON() → { uid, refs } ────────
-// 这份 fixture 是从真实 Config.toJSON() 抄下来的（19 个字段、uid/refs/dict/meta 全同构）；
-// 唯一改动：executorCatalog 的 default 换成了短样例（原值是本机探测出的一大串模型名）。
+// ── schema 的真实形状（15 字段完整覆盖）────────────────────────────────
 const REAL_SCHEMA = {
-  uid: 76,
+  uid: 90,
   refs: {
-    '3': { type: 'string', meta: { description: '工作流仓库根（含 dispatch/ 与 ideas/）。默认由插件包位置推出', default: '<abs>', volatile: true } },
-    '7': { type: 'string', meta: { description: '座位表路径，相对仓库根；默认 dispatch/seats.json', default: 'dispatch/seats.json', volatile: true } },
-    '15': { type: 'string', meta: { description: '只读：调研 / novelty / 实现三个环节写在哪里', default: '调研 scout → roles/scout.md', volatile: true } },
-    '19': { type: 'string', meta: { description: '其余环节的选择', default: '', volatile: true } },
-    '23': { type: 'string', meta: { description: '评审票（可增删）', default: '', volatile: true } },
-    '27': { type: 'string', meta: { description: '只读：本机可用的执行者及其当前模型', default: 'codex:gpt-6.1-sol;claude:opus', volatile: true } },
-    '31': { type: 'string', meta: { description: '发散环节的执行者命令名', default: '', volatile: true } },
-    '35': { type: 'string', meta: { description: '发散环节用的模型', default: '', volatile: true } },
-    '76': {
+    '3': { type: 'string', meta: { description: '科研项目文件夹路径', default: '/repo', volatile: true } },
+    '7': { type: 'string', meta: { description: '座位表相对路径', default: 'dispatch/seats.json', volatile: true } },
+    '11': { type: 'string', meta: { description: '文献调研环节执行工具', default: '', volatile: true } },
+    '13': { type: 'string', meta: { description: '文献调研环节模型名', default: '', volatile: true } },
+    '17': { type: 'string', meta: { description: '想法发散环节执行工具', default: '', volatile: true } },
+    '21': { type: 'string', meta: { description: '想法发散环节模型名', default: '', volatile: true } },
+    '25': { type: 'string', meta: { description: '想法发散单轮默认产出条数', default: '', volatile: true } },
+    '29': { type: 'string', meta: { description: '想法发散历史死胡同过滤', default: '', volatile: true } },
+    '33': { type: 'string', meta: { description: '评审票（可自由增删）', default: '', volatile: true } },
+    '37': { type: 'string', meta: { description: '前置查重环节执行工具', default: '', volatile: true } },
+    '41': { type: 'string', meta: { description: '前置查重环节模型名', default: '', volatile: true } },
+    '45': { type: 'string', meta: { description: '只读：工具与候选模型目录', default: '', volatile: true } },
+    '49': { type: 'string', meta: { description: '只读：工具安装状态', default: '', volatile: true } },
+    '53': { type: 'string', meta: { description: '历史兼容字段', default: '', volatile: true } },
+    '57': { type: 'string', meta: { description: '历史兼容字段', default: '', volatile: true } },
+    '90': {
       type: 'object', meta: { default: {} },
       dict: {
-        repoRoot: 3, seatsFile: 7, otherStages: 15, stageOpinions: 19, reviewVotes: 23,
-        executorCatalog: 27, divergeCommand: 31, divergeModel: 35,
+        repoRoot: 3, seatsFile: 7,
+        scoutCommand: 11, scoutModel: 13,
+        divergeCommand: 17, divergeModel: 21, divergeCount: 25, divergeUseDeadEnds: 29,
+        reviewVotes: 33,
+        noveltyCommand: 37, noveltyModel: 41,
+        executorCatalog: 45, executorStatus: 49,
+        otherStages: 53, stageOpinions: 57,
       },
     },
   },
 };
-// 座位是数据文件而非设置字段；"跑哪几座"并入评审票。
-const ALL_KEYS = ['repoRoot', 'seatsFile', 'otherStages', 'stageOpinions', 'reviewVotes',
-  'executorCatalog', 'divergeCommand', 'divergeModel'];
+const ALL_KEYS = [
+  'repoRoot', 'seatsFile',
+  'scoutCommand', 'scoutModel',
+  'divergeCommand', 'divergeModel', 'divergeCount', 'divergeUseDeadEnds',
+  'reviewVotes',
+  'noveltyCommand', 'noveltyModel',
+  'executorCatalog', 'executorStatus',
+  'otherStages', 'stageOpinions',
+];
 
 {
   const props = mod.__test.propsFromSchema(REAL_SCHEMA);
-  ok(!!props && !('properties' in REAL_SCHEMA), 'fixture 是真实形状：没有 properties 键（生产上就是这个）');
+  ok(!!props && !('properties' in REAL_SCHEMA), 'fixture 为真实 { uid, refs } 形状');
   const desc = { ns: 'research-dispatch', revision: 7, user: {}, value: {}, schema: REAL_SCHEMA };
   const fields = mod.__test.fieldsOf(desc);
-  ok(fields.length === 8, '真实形状下 8 个键被列出（实际 ' + fields.length + ' 个）—— 座位与"默认座位"都不是设置字段');
-  ok(fields.map((f) => f.key).join(',') === ALL_KEYS.join(','), '列出的键与 Config 的可编辑字段逐一对应且顺序一致');
-  const labelled = fields.filter((f) => ['repoRoot', 'seatsFile'].includes(f.key));
-  ok(labelled.length === 2 && labelled.every((f) => f.title && f.title !== f.key), '有中文标签的 2 个字段都用标签而不是键名');
-  ok(/schema\.refs/.test(globalThis.window.__researchDispatch.fieldSource || ''), '诊断里记下字段来自 schema.refs（证明确实走了新解析，不是 value 兜底）');
-  ok(fields.find((f) => f.key === 'reviewVotes').description.includes('评审票'), 'meta.description 被带进字段说明');
+  ok(fields.length === 15 && fields.map((f) => f.key).join(',') === ALL_KEYS.join(','),
+    '真实形状下 15 个字段完整列出且顺序一致（实际 ' + fields.length + ' 个）');
+  ok(/schema\.refs/.test(globalThis.window.__researchDispatch.fieldSource || ''), '字段来自 schema.refs');
 }
 
-// 回归（P1-6）：schema 完全缺失时（describe 只给了 value），必须合并完整已知字段集防止丢键或锁死保存按钮
 {
-  const noSchema = { ns: 'research-dispatch', value: { reviewVotes: 'codex:gpt-9,' } };
+  const noSchema = { ns: 'research-dispatch', value: { reviewVotes: 'codex:gpt-5' } };
   const f2 = mod.__test.fieldsOf(noSchema);
-  ok(f2.length === 8, 'schema 缺失时合并完整 8 个已知字段（实际 ' + f2.length + ' 个）');
-  ok(f2.some((f) => f.key === 'reviewVotes' && f.title === '评审票')
-    && f2.some((f) => f.key === 'divergeCommand'), '兜底字段保留可读标题与全部可编辑键');
+  ok(f2.length === 15, 'schema 缺失时合并完整 15 个已知字段（实际 ' + f2.length + ' 个）');
+  ok(f2.some((f) => f.key === 'scoutCommand' && f.title === '文献调研工具')
+    && f2.some((f) => f.key === 'noveltyCommand' && f.title === '前置查重工具'),
+    '兜底字段保留四阶段可读标题');
 }
 
-// ── 渲染：用真状态跑页面，三条分支各来一次 ──────────────────────────
-// 注意：section 组件是 (p) => h(Page, { ...p, ctx })，Page 拿到的是 apply() 那次
-// 的 ctx，不是渲染时传进去的 —— 所以每条分支都要用对应 ctx 重新 mount 一遍。
-let renderWith = null;
+// ── 页面级完整交互渲染：五大分区顺序、无 api、发散条数/死胡同开关、兼容旧 api ──
 function mount(view) {
   hookState.length = 0;
   registered = null;
-  renderWith = view.remote;
   mod.apply({
     slots: { inject: (n, fn) => { registered = { slot: n, ...fn() }; }, register: (def, comp) => ({ def, comp }) },
     get: (n) => (view.get ? view.get(n) : undefined),
@@ -480,128 +417,176 @@ function render() {
   return { tree, texts, inputs, selects, buttons, effects: pendingEffects };
 }
 async function settle(page) {
-  for (const fn of page.effects) { try { fn(); } catch { /* 副作用自己坏掉不该中断自检 */ } }
+  for (const fn of page.effects) { try { fn(); } catch { /* 忽略 */ } }
   await tick(); await tick();
   return render();
 }
-
-// ① 连通 + 有本命名空间 → 路线 A 诚实双节（仅「评审」与「发散」，无零消费者摆设区）
-const FULL_VALUE = {
-  repoRoot: '/repo', seatsFile: 'dispatch/seats.json',
-  otherStages: 'x', stageOpinions: '', reviewVotes: '', executorCatalog: 'codex:gpt-6.1-sol;claude:opus;dsh:;api:;kimi:sensenova/kimi-k3',
-  divergeCommand: '', divergeModel: '',
+const optsOf = (p) => {
+  const out = [];
+  (function flat(n) { (Array.isArray(n) ? n : [n]).forEach((x) => { if (Array.isArray(x)) flat(x); else if (x && x.props) out.push(x.props); }); })(p.children || []);
+  return out;
 };
-const readyApi = { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 7, user: {}, value: FULL_VALUE, schema: REAL_SCHEMA }] } }), update: async () => ({ ok: true, value: {} }) };
+
+const FULL_VALUE = {
+  repoRoot: '/workspace/demo-project',
+  seatsFile: 'dispatch/seats.json',
+  scoutCommand: '',
+  scoutModel: '',
+  divergeCommand: '',
+  divergeModel: '',
+  divergeCount: '',
+  divergeUseDeadEnds: '',
+  reviewVotes: '',
+  noveltyCommand: '',
+  noveltyModel: '',
+  executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5;dsh:qoder/deepseek-v4-pro;gemini:gemini-2.5-pro;kimi:kimi-k2-thinking',
+  executorStatus: 'codex:1;claude:1;dsh:1;gemini:0;kimi:1',
+  otherStages: '',
+  stageOpinions: '',
+};
+
+let savedPatches = [];
+const readyApi = {
+  describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 7, user: {}, value: FULL_VALUE, schema: REAL_SCHEMA }] } }),
+  update: async (_ns, patch) => { savedPatches.push(patch); return { ok: true, value: {} }; },
+};
+
 {
   mount({ remote: { settings: readyApi } });
   let page = render();
-  ok(page.texts.some((t) => t.includes('正在连接设置服务')), '首帧是"正在连接设置服务…"（不是空白）');
+  ok(page.texts.some((t) => t.includes('正在连接设置服务')), '首帧为连接提示（非空白）');
   page = await settle(page);
 
-  const modelInputs = page.inputs.filter((p) => String(p.placeholder || '').includes('模型（留空'));
-  ok(modelInputs.length === 0, '① 面板上没有逐座模型输入框（实际 ' + modelInputs.length + ' 个）');
-  const optsOf = (p) => {
-    const out = [];
-    (function flat(n) { (Array.isArray(n) ? n : [n]).forEach((x) => { if (Array.isArray(x)) flat(x); else if (x && x.props) out.push(x.props); }); })(p.children || []);
-    return out;
-  };
-  const execSelects = page.selects.filter((p) => optsOf(p).some((o) => o.value === 'subagent'));
-  ok(execSelects.length === 0, '① 面板任何下拉都不含无后端座位的 subagent（实际 ' + execSelects.length + ' 个）');
-  ok(!page.inputs.some((p) => String(p.placeholder || '').includes('空格分隔，如 codex claude dsh')),
-    '① 「默认座位」输入框已删除（它和评审环节是同一件事，且票非空时它完全不生效）');
-  ok(page.texts.some((t) => t.includes('几位评审员')), '① 说明把「票」讲成「几位评审员」（不用"座位"这种内部说法）');
-  ok(page.texts.some((t) => t.includes('配置文件')), '① 想固定某位评审员的模型去哪改：给了一句进阶指路（不暴露文件名）');
+  // 五大分区按科研闭环清晰排列
+  const SECTIONS = ['工作流项目', '文献调研', '想法发散', '多票评审', '前置查重'];
+  const pos = SECTIONS.map((n) => page.texts.findIndex((t) => t === n));
+  ok(pos.every((i) => i >= 0), '五大分区标题齐全（' + SECTIONS.join(' → ') + '）');
+  ok(pos[0] < pos[1] && pos[1] < pos[2] && pos[2] < pos[3] && pos[3] < pos[4],
+    '五大分区严格按科研闭环排序（索引 ' + pos.join(' < ') + '）');
+
+  // JARGON 与内部键名零泄露
   const JARGON = /dispatch\/|\.sh\b|\.json|default_backends|seats\[|model_override|executor_override|subagent|tmux|kimi-k3|命名空间|网关/;
-  ok(!page.texts.some((t) => JARGON.test(t)), '面板文案里没有文件路径 / 字段名 / 模型代号（面向所有人）');
-  ok(!page.texts.includes('codexModel') && !page.texts.includes('seatOverrides') && !page.texts.includes('seatRoster'),
-    '⑩ 座位相关的键名一个都不出现在面板上');
-  ok(!page.texts.includes('stageOpinions'), '⑩ 废弃的 stageOpinions 归入隐藏，不进高级项');
-  ok(page.texts.filter((t) => t === 'divergeCommand' || t === 'divergeModel').length === 0,
-    '⑩ divergeCommand / divergeModel 只由「发散环节」下拉渲染，不再在「高级项」里重复一次');
-  ok(page.texts.filter((t) => t === '高级项').length === 0,
-    '⑩ 每个字段都有专用控件或隐藏时，「高级项」整块不渲染（不留空标题）');
-  ok(!page.texts.some((t) => t === 'repoRoot' || t === 'seatsFile' || t === 'executorCatalog' || t === 'otherStages'),
-    '元信息（repoRoot / seatsFile / executorCatalog / otherStages）仍然隐藏');
+  ok(!page.texts.some((t) => JARGON.test(t)), '面板白话文案零内部文件名 / 字段名 / JARGON 泄露');
+  ok(!page.texts.some((t) => ['repoRoot', 'seatsFile', 'scoutCommand', 'divergeCommand', 'divergeCount', 'divergeUseDeadEnds', 'noveltyCommand', 'executorCatalog', 'executorStatus', 'otherStages', 'stageOpinions'].includes(t)),
+    '所有配置内部键名均由专用白话控件接管，不裸露在页面上');
+  ok(page.texts.filter((t) => t === '高级项').length === 0, '无未知字段时不渲染「高级项」');
+  ok(!/undefined/.test(page.texts.join(' ')), '无 undefined 泄漏');
 
-  ok(!/undefined/.test(page.texts.join(' ')), '没有 undefined 泄漏');
+  // 所有下拉框均不含 subagent 或 api（默认无旧残留时），且带友好工具标签与未安装提示
+  const anySubagent = page.selects.some((p) => optsOf(p).some((o) => o.value === 'subagent'));
+  const anyApi = page.selects.some((p) => optsOf(p).some((o) => o.value === 'api'));
+  ok(!anySubagent && !anyApi, '所有下拉框均移除 api 与 subagent');
+  const scoutSelect = page.selects[0];
+  const scoutLabels = optsOf(scoutSelect).map((o) => String([].concat(o.children || []).join('')));
+  ok(scoutLabels.some((l) => l.includes('codex · Codex CLI'))
+    && scoutLabels.some((l) => l.includes('kimi · Kimi Code'))
+    && scoutLabels.some((l) => l.includes('gemini · Gemini CLI（未检测到命令）')),
+    '下拉框展示友好名称，并对 executorStatus=0 的工具柔和标注「（未检测到命令）」');
 
-  // ── 路线 A 诚实两节结构：评审 → 发散（砍掉 3 个无后端消费者的「只登记」摆设区）──
-  const FLOW = ['评审', '发散'];
-  const pos = FLOW.map((n) => page.texts.findIndex((t) => t === n));
-  ok(pos.every((i) => i >= 0), '两节标题都在且就是环节名（' + FLOW.join(' / ') + '）');
-  ok(pos[0] < pos[1], '节序 = 评审 → 发散（实际 ' + pos.join(' < ') + '）');
-  ok(!page.texts.some((t) => t === '文献调研' || t === '新颖度复查' || t === '实现与实验' || t.includes('只登记由谁做')),
-    '已砍掉三个零后端消费者的「只登记」摆设区块');
-  ok(page.texts.some((t) => t.includes('科研派工 · 评审与发散')),
-    '主标题准确对齐「科研派工 · 评审与发散」');
-  ok(page.texts.join('').includes('默认（按配置） · 默认'),
-    'divergeCommand 留空时如实展示「默认（按配置） · 默认」（不再绑定死特定 Agent）');
+  // 工作流项目输入框 + 发散单轮默认条数 + 死胡同过滤开关交互并保存
+  const pathInput = page.inputs.find((p) => String(p.className || '').includes('rdp-in-path'));
+  const numInput = page.inputs.find((p) => String(p.className || '').includes('rdp-in-num'));
+  const deadEndsSelect = page.selects.find((p) => String(p.className || '').includes('rdp-in-mode'));
+  ok(!!pathInput && pathInput.value === '/workspace/demo-project', '工作流项目展示 repoRoot 输入框');
+  ok(!!numInput && numInput.value === '10' && numInput.max === 50,
+    '想法发散内联展示单轮默认条数（空串回退展示 10，上限 max=50）');
+  ok(!!deadEndsSelect && deadEndsSelect.value === 'true', '想法发散内联展示历史死胡同过滤选择（空串回退展示 true）');
 
-  // 受控组件真的读 draft：点"加一票"后票数 +1，再点"删除"允许删空回 0 票（保存 "" 恢复默认阵容）
-  const addBtn = page.buttons.find((b) => String(b.children || '').includes('加一票'));
-  ok(!!addBtn && typeof addBtn.onClick === 'function', '有「加一票」按钮');
-  const votesBefore = page.texts.filter((t) => /^票 \d+$/.test(t)).length;
+  pathInput.onChange({ target: { value: '/workspace/new-topic' } });
+  scoutSelect.onChange({ target: { value: 'kimi' } });
+  numInput.onChange({ target: { value: '45' } });
+  deadEndsSelect.onChange({ target: { value: 'false' } });
+  let editedPage = render();
+  // 同时设置前置查重为 gemini
+  const noveltySelect = editedPage.selects[editedPage.selects.length - 1];
+  noveltySelect.onChange({ target: { value: 'gemini' } });
+  editedPage = render();
+
+  // 加一票 codex
+  const addBtn = editedPage.buttons.find((b) => String([].concat(b.children || []).join('')).includes('加一票'));
   addBtn.onClick();
-  const page2 = render();
-  const votesAfter = page2.texts.filter((t) => /^票 \d+$/.test(t)).length;
-  ok(votesAfter === votesBefore + 1, '票是受控的：点「加一票」→ draft 变化 → 重渲染多一行（' + votesBefore + ' → ' + votesAfter + '）');
-  const delBtn = page2.buttons.find((b) => String(b.children || '') === '删除');
-  ok(!!delBtn && typeof delBtn.onClick === 'function', '新增票行带可点击「删除」按钮');
-  delBtn.onClick();
-  const page3 = render();
-  ok(page3.texts.filter((t) => /^票 \d+$/.test(t)).length === 0, '允许删空最后一票回到 0 票默认阵容态（P2-1）');
+  editedPage = render();
+  const saveBtn = editedPage.buttons.find((b) => String([].concat(b.children || []).join('')) === '保存');
+  ok(!!saveBtn && !saveBtn.disabled, '修改任意阶段配置后保存按钮激活');
+  savedPatches = [];
+  saveBtn.onClick();
+  await tick(); await tick();
+  ok(savedPatches.length === 1
+    && savedPatches[0].repoRoot === '/workspace/new-topic'
+    && savedPatches[0].scoutCommand === 'kimi'
+    && savedPatches[0].divergeCount === '45'
+    && savedPatches[0].divergeUseDeadEnds === 'false'
+    && savedPatches[0].noveltyCommand === 'gemini'
+    && savedPatches[0].reviewVotes === 'codex:',
+    '点击保存完整提交五分区改动（支持 31–50 范围内条数如 45）');
+
+  // 超上限 >50 自动钳制到 50，且在默认空串下显式保存 10/true 仍可写穿提交
+  const pClamp = render();
+  const numClamp = pClamp.inputs.find((p) => String(p.className || '').includes('rdp-in-num'));
+  const deadClamp = pClamp.selects.find((p) => String(p.className || '').includes('rdp-in-mode'));
+  numClamp.onChange({ target: { value: '99' } });
+  deadClamp.onChange({ target: { value: 'true' } });
+  const pClamp2 = render();
+  const saveClamp = pClamp2.buttons.find((b) => String([].concat(b.children || []).join('')) === '保存');
+  savedPatches = [];
+  saveClamp.onClick();
+  await tick(); await tick();
+  ok(savedPatches.length === 1
+    && savedPatches[0].divergeCount === '50'
+    && savedPatches[0].divergeUseDeadEnds === 'true',
+    '单轮条数超上限 99 钳制为 50，且在 value 为空串时显式选 true 仍可正常提交保存');
 }
 
-// ①-b 升级残留：设置文档里若还留着上一版的 seatOverrides / seatRoster 键，
-// 面板不许把它们画出来（那两个字段已经从 Config 删掉了）。
+// ── 历史残留 api 兼容：仅在当前值为 api 时显示兼容项以便用户切走 ──────────
 {
-  const v2 = Object.assign({}, FULL_VALUE, { seatOverrides: 'codex:gpt-9:', seatRoster: 'mysandbox:cli:1' });
-  mount({ remote: { settings: { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 7, user: {}, value: v2, schema: REAL_SCHEMA }] } }), update: async () => ({ ok: true, value: {} }) } } });
-  const p2 = await settle(render());
-  const mi2 = p2.inputs.filter((p) => String(p.placeholder || '').includes('模型（留空'));
-  ok(mi2.length === 0, '①-b 残留的 seatOverrides 不会变出座位控件（实际 ' + mi2.length + ' 个）');
-  ok(!p2.texts.some((t) => t === 'seatOverrides' || t === 'seatRoster'), '①-b 残留键名不出现在「高级项」里');
+  const legacyApiVal = Object.assign({}, FULL_VALUE, { divergeCommand: 'api', reviewVotes: 'api:deepseek-chat,kimi:kimi-k2' });
+  mount({ remote: { settings: { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 8, user: {}, value: legacyApiVal, schema: REAL_SCHEMA }] } }), update: async () => ({ ok: true, value: {} }) } } });
+  const pApi = await settle(render());
+  const scoutOpts = optsOf(pApi.selects[0]).map((o) => o.value);
+  const divergeOpts = optsOf(pApi.selects[1]).map((o) => o.value);
+  ok(!scoutOpts.includes('api') && divergeOpts.includes('api'),
+    '历史配置残留 api 时，仅在当前值为 api 的下拉框显示兼容项供切走，其余下拉框绝不出现 api');
 }
 
-// ⑦ 分支一：describe 通了但没有本命名空间 → 说"没注册"，不说"连不上"
+// ── NS_MISSING 与断连态：断连时五分区骨架保留且控件全部禁用 ─────────────
 {
   mount({ remote: { settings: { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'other', value: {} }] } }) } } });
   const page = await settle(render());
-  ok(page.texts.some((t) => t.includes('本页暂时没有可编辑项')), '⑦ 连上了但没有可编辑项 → 说的是"没有可编辑项"，不是"连不上"');
-  ok(!page.texts.some((t) => t.includes('连不上设置服务')), '⑦ 这种情况不许被误报成"连不上设置服务"');
+  ok(page.texts.some((t) => t.includes('本页暂时没有可编辑项')) && !page.texts.some((t) => t.includes('连不上设置服务')),
+    'NS_MISSING 与连接故障严格区分');
 }
-
-// ⑦ 分支二：describe 直接抛 → 才是"连不上设置服务"
 {
   mount({ remote: { settings: { describe: async () => { throw new Error('RPC 断开'); } } } });
   const page = await settle(render());
-  ok(page.texts.some((t) => t.includes('连不上设置服务') && t.includes('RPC 断开')), '⑦ describe 抛错 → "连不上设置服务（RPC 断开）"');
-  ok(!page.texts.some((t) => t.includes('本页暂时没有可编辑项')), '⑦ 不要反过来把连接故障说成"没有可编辑项"');
-  ok(page.texts.some((t) => t.includes('科研派工 · 评审与发散')) && page.texts.some((t) => t === '评审') && page.texts.some((t) => t === '发散'),
-    '连不上服务时首屏两节骨架仍在（不是整页空白）');
-  const addBtn = page.buttons.find((b) => String(b.children || '').includes('加一票'));
-  ok(!!addBtn && addBtn.disabled === true, '断连态（!live）下加票等编辑按钮全部禁用');
+  ok(page.texts.some((t) => t.includes('连不上设置服务') && t.includes('RPC 断开')), 'describe 抛错报连不上设置服务');
+  ok(['工作流项目', '文献调研', '想法发散', '多票评审', '前置查重'].every((s) => page.texts.includes(s)),
+    '断连态下五大分区骨架完整保留（不整页空白）');
+  const addBtn = page.buttons.find((b) => String([].concat(b.children || []).join('')).includes('加一票'));
+  const pathIn = page.inputs.find((p) => String(p.className || '').includes('rdp-in-path'));
+  ok(!!addBtn && addBtn.disabled === true && !!pathIn && pathIn.disabled === true, '断连态下交互控件全部禁用');
 }
 
-// ── 写回：update(ns, patch, revision) ─────────────────────────────
-const DESCRIPTOR = { ns: 'research-dispatch', revision: 7, user: { defaultBackends: 'codex dsh' }, value: {}, schema: REAL_SCHEMA };
-const settingsApi = {
-  describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'other', value: {} }, DESCRIPTOR] } }),
-  update: async (...args) => { ctx2.__calls.push(args); return { ok: true, value: {} }; },
-};
-const gw = { settingsController: settingsApi };
-const ctx2 = { get: (n) => (n === 'remote' ? gw : undefined), __calls: [] };
-const d = await mod.__test.readDescriptor(ctx2);
-ok(d && d.ns === 'research-dispatch', 'readDescriptor 从全部命名空间里挑出自己那个（方法挂在 settingsController 上也能找到）');
-await mod.__test.writePatch(ctx2, { reviewVotes: 'codex:gpt-9,' }, 7);
-const call = ctx2.__calls[0];
-ok(call && call[0] === 'research-dispatch' && call[1].reviewVotes === 'codex:gpt-9,' && call[2] === 7,
-  'writePatch 调 update(命名空间, 只含改动的 patch, revision)');
+// ── 写回：update(ns, patch, revision) ────────────────────────────────
+{
+  const DESCRIPTOR = { ns: 'research-dispatch', revision: 7, user: {}, value: {}, schema: REAL_SCHEMA };
+  const settingsApi = {
+    describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'other', value: {} }, DESCRIPTOR] } }),
+    update: async (...args) => { ctxW.__calls.push(args); return { ok: true, value: {} }; },
+  };
+  const ctxW = { get: (n) => (n === 'remote' ? { settingsController: settingsApi } : undefined), __calls: [] };
+  const d = await mod.__test.readDescriptor(ctxW);
+  ok(d && d.ns === 'research-dispatch', 'readDescriptor 兼容 settingsController');
+  await mod.__test.writePatch(ctxW, { reviewVotes: 'codex:gpt-5,kimi:kimi-k2' }, 7);
+  const call = ctxW.__calls[0];
+  ok(call && call[0] === 'research-dispatch' && call[1].reviewVotes === 'codex:gpt-5,kimi:kimi-k2' && call[2] === 7,
+    'writePatch 调 update(ns, patch, revision)');
+}
 
-// ── 面板不写盘 & 默认不污染用户主目录（GP-08）──────────────────────────
+// ── 宿主层 lib/index.js：统一五座探测 + Config 15 字段 + 写穿同步 seats.json ──
 {
   const host = await import(new URL('../lib/index.js', import.meta.url).href);
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-wt-'));
+  const registryMod = await import(new URL('../lib/registry.mjs', import.meta.url).href);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-wt-v21-'));
   const fakeHome = path.join(tmp, 'clean-home');
   fs.mkdirSync(fakeHome, { recursive: true });
   const prevDiag = process.env.RESEARCH_DISPATCH_DIAG;
@@ -609,49 +594,169 @@ ok(call && call[0] === 'research-dispatch' && call[1].reviewVotes === 'codex:gpt
   delete process.env.RESEARCH_DISPATCH_DIAG;
   process.env.DSH_HOME = path.join(fakeHome, '.dsh');
 
+  const catKeys = host.executorCatalog().split(';').map((s) => s.split(':')[0]);
+  const statPairs = host.executorStatus().split(';');
+  ok(JSON.stringify(catKeys) === JSON.stringify(['codex', 'claude', 'dsh', 'gemini', 'kimi']),
+    'host.executorCatalog() 精确覆盖 [codex,claude,dsh,gemini,kimi] 五座，不含 api / subagent');
+  ok(statPairs.length === 5 && statPairs.every((p) => /^(codex|claude|dsh|gemini|kimi):(0|1)$/.test(p)),
+    'host.executorStatus() 输出五座 0/1 安装标记');
+
   const repo = path.join(tmp, 'repo');
   const seatsFile = path.join(repo, 'dispatch', 'seats.json');
   fs.mkdirSync(path.dirname(seatsFile), { recursive: true });
   fs.writeFileSync(seatsFile, JSON.stringify({
-    version: 1, default_backends: ['codex', 'claude', 'dsh'],
+    version: 2,
+    default_backends: ['codex', 'claude', 'dsh'],
     seats: [
-      { id: 'codex', kind: 'cli', enabled: true, model_override: 'hand-written' },
-      { id: 'claude', kind: 'cli', enabled: true }, { id: 'dsh', kind: 'cli', enabled: true },
+      { id: 'codex', kind: 'cli', command: 'codex', argv: ['exec', '{payload}'], enabled: true, model_override: 'hand-written' },
+      { id: 'claude', kind: 'cli', command: 'claude', argv: ['-p', '{payload}'], enabled: true },
+      { id: 'dsh', kind: 'cli', command: 'dsh', argv: ['run', '{payload}'], enabled: true },
     ],
-  }, null, 2));
-  const before = fs.readFileSync(seatsFile, 'utf8');
+  }, null, 2) + '\n');
 
-  const events = [];
-  host.apply({ logger: () => {}, on: (evt) => events.push(evt) },
-    { repoRoot: repo, seatsFile: 'dispatch/seats.json', reviewVotes: 'codex:gpt-9,' });
-  ok(fs.readFileSync(seatsFile, 'utf8') === before, '面板保存不写盘：apply() 不碰 dispatch/seats.json');
+  // 构造 volatile 响应式包装配置，验证挂载即同步 + loader/volatile-update 保存即写穿 lineup
+  const liveState = {
+    repoRoot: repo,
+    seatsFile: 'dispatch/seats.json',
+    scoutCommand: 'gemini',
+    scoutModel: 'gemini-2.5-pro',
+    divergeCommand: 'kimi',
+    divergeModel: 'kimi-k2-thinking',
+    divergeCount: '12',
+    divergeUseDeadEnds: 'false',
+    reviewVotes: 'codex:gpt-5,claude:claude-sonnet-4-5',
+    noveltyCommand: 'claude',
+    noveltyModel: 'claude-sonnet-4-5',
+  };
+  const volatileCfg = {};
+  for (const k of Object.keys(liveState)) {
+    volatileCfg[k] = { get: () => liveState[k] };
+  }
+
+  const listeners = {};
+  let unsubVolatileCalled = false;
+  host.apply({
+    logger: () => ({ info() {}, error() {} }),
+    on: (evt, fn) => {
+      listeners[evt] = fn;
+      if (evt === 'loader/volatile-update') return () => { unsubVolatileCalled = true; };
+      return () => {};
+    },
+  }, volatileCfg);
+
+  ok(typeof listeners['loader/volatile-update'] === 'function',
+    'host.apply() 注册 loader/volatile-update 监听以响应面板保存');
   ok(!fs.existsSync(path.join(fakeHome, '.dsh', 'research-dispatch-diag.log')),
-    '默认未设 RESEARCH_DISPATCH_DIAG 时绝不静默向 ~/.dsh 写诊断日志（GP-08）');
-  if (prevDiag === undefined) delete process.env.RESEARCH_DISPATCH_DIAG; else process.env.RESEARCH_DISPATCH_DIAG = prevDiag;
-  if (prevDshHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevDshHome;
-  ok(!events.includes('loader/volatile-update'), '不再注册 volatile 变更监听（没有要写回的东西）');
-  ok(JSON.parse(fs.readFileSync(seatsFile, 'utf8')).seats[0].model_override === 'hand-written',
-    '座位表里手写的 model_override 原样保留（面板从不碰它）');
+    '默认未设 RESEARCH_DISPATCH_DIAG 时绝不往 ~/.dsh 写诊断日志');
 
-  // Config 的 seatsFile 约束仍在：读取路径也必须钉在仓库内
+  ok(typeof registryMod.syncPanelLineupToSeats === 'function',
+    'registry.mjs 导出 syncPanelLineupToSeats 供宿主写穿调用');
+  if (typeof registryMod.syncPanelLineupToSeats === 'function') {
+    const afterMount = JSON.parse(fs.readFileSync(seatsFile, 'utf8'));
+    ok(afterMount.seats[0].model_override === 'hand-written',
+      '写穿同步严守边界：绝不改动 seats[0].model_override 等手写座位属性');
+    ok(afterMount.lineup
+      && afterMount.lineup.scout && afterMount.lineup.scout.seat === 'gemini' && afterMount.lineup.scout.model === 'gemini-2.5-pro'
+      && afterMount.lineup.diverge && afterMount.lineup.diverge.seat === 'kimi'
+      && afterMount.lineup.diverge.count === 12 && afterMount.lineup.diverge.use_dead_ends === false
+      && Array.isArray(afterMount.lineup.review) && afterMount.lineup.review.length === 2
+      && afterMount.lineup.novelty && afterMount.lineup.novelty.seat === 'claude',
+      'apply() 初次挂载将四阶段阵容（含 diverge.count=12, use_dead_ends=false）写穿至 seats.json lineup');
+
+    // 模拟用户在 DSH 面板修改配置并点击「保存」触发 loader/volatile-update
+    liveState.reviewVotes = 'codex:gpt-5,codex:o3,kimi:kimi-k2-thinking';
+    liveState.divergeCount = '8';
+    liveState.divergeUseDeadEnds = 'true';
+    listeners['loader/volatile-update']();
+
+    const afterSave = JSON.parse(fs.readFileSync(seatsFile, 'utf8'));
+    ok(Array.isArray(afterSave.lineup.review) && afterSave.lineup.review.length === 3
+      && afterSave.lineup.review[1].seat === 'codex' && afterSave.lineup.review[1].model === 'o3'
+      && afterSave.lineup.review[2].seat === 'kimi'
+      && afterSave.lineup.diverge.count === 8 && afterSave.lineup.diverge.use_dead_ends === true
+      && afterSave.seats[0].model_override === 'hand-written',
+      '触发 loader/volatile-update 后即时写穿最新 lineup 至 seats.json 且保留手写 model_override');
+  }
+
+  if (typeof listeners.dispose === 'function') listeners.dispose();
+  ok(unsubVolatileCalled === true, '插件 dispose 时正确释放 loader/volatile-update 订阅');
+
+  // ── 回归测试（V21-BUG-1）：Config 默认空串不冲毁 CLI 预置 lineup.diverge.{count,use_dead_ends} ──
+  {
+    const repoBug1 = path.join(tmp, 'repo-bug1');
+    const seatsBug1 = path.join(repoBug1, 'dispatch', 'seats.json');
+    fs.mkdirSync(path.dirname(seatsBug1), { recursive: true });
+    fs.writeFileSync(seatsBug1, JSON.stringify({
+      version: 2,
+      default_backends: ['codex', 'claude', 'dsh'],
+      lineup: {
+        diverge: { seat: 'gemini', model: '', count: 8, use_dead_ends: false },
+      },
+      seats: [
+        { id: 'codex', kind: 'cli', command: 'codex', argv: ['exec', '{payload}'], enabled: true },
+        { id: 'claude', kind: 'cli', command: 'claude', argv: ['-p', '{payload}'], enabled: true },
+        { id: 'gemini', kind: 'cli', command: 'gemini', argv: ['-p', '{payload}'], enabled: true },
+      ],
+    }, null, 2) + '\n');
+
+    // 1) 直接以 host.Config({ repoRoot }) 默认值挂载 apply()
+    const evalCfg = host.Config({ repoRoot: repoBug1 });
+    const bug1State = {};
+    const bug1Volatile = {};
+    for (const k of Object.keys(evalCfg)) {
+      bug1State[k] = host.plainValue(evalCfg[k]);
+      bug1Volatile[k] = { get: () => bug1State[k] };
+    }
+    const bug1Listeners = {};
+    host.apply({
+      logger: () => ({ info() {}, error() {} }),
+      on: (evt, fn) => { bug1Listeners[evt] = fn; return () => {}; },
+    }, bug1Volatile);
+
+    const afterApplyDefault = JSON.parse(fs.readFileSync(seatsBug1, 'utf8'));
+    ok(afterApplyDefault.lineup
+      && afterApplyDefault.lineup.diverge
+      && afterApplyDefault.lineup.diverge.seat === 'gemini'
+      && afterApplyDefault.lineup.diverge.count === 8
+      && afterApplyDefault.lineup.diverge.use_dead_ends === false,
+      'V21-BUG-1：apply(ctx, Config({ repoRoot })) 绝不冲毁 CLI 预置的 count=8 与 use_dead_ends=false');
+
+    // 2) 仅修改无关项 scoutCommand='claude' 保存时，发散 count=8 / use_dead_ends=false 仍原封不动
+    bug1State.scoutCommand = 'claude';
+    bug1Listeners['loader/volatile-update']();
+    const afterUnrelatedSave = JSON.parse(fs.readFileSync(seatsBug1, 'utf8'));
+    ok(afterUnrelatedSave.lineup.scout && afterUnrelatedSave.lineup.scout.seat === 'claude'
+      && afterUnrelatedSave.lineup.diverge.count === 8
+      && afterUnrelatedSave.lineup.diverge.use_dead_ends === false,
+      'V21-BUG-1：面板仅保存无关项 scoutCommand=claude 时，seats.json 的 count=8 与 use_dead_ends=false 保持不变');
+
+    // 3) 面板显式设置 divergeCount='10' 与 divergeUseDeadEnds='true' 时正常写穿覆盖
+    bug1State.divergeCount = '10';
+    bug1State.divergeUseDeadEnds = 'true';
+    bug1Listeners['loader/volatile-update']();
+    const afterExplicitSave = JSON.parse(fs.readFileSync(seatsBug1, 'utf8'));
+    ok(afterExplicitSave.lineup.diverge.count === 10
+      && afterExplicitSave.lineup.diverge.use_dead_ends === true,
+      'V21-BUG-1：面板显式设置 divergeCount=10 / divergeUseDeadEnds=true 后正常写穿更新 seats.json');
+    if (typeof bug1Listeners.dispose === 'function') bug1Listeners.dispose();
+  }
+
+  // Config 路径穿越防护与默认值核验
   const bad = ['C:/tmp/x.json', '/etc/x.json', '../outside.json', 'a/../../b.json', 'dispatch/notes.md'];
   ok(bad.every((v) => { try { host.Config({ seatsFile: v, repoRoot: repo }); return false; } catch { return true; } }),
-    '④ Config 的 seatsFile 约束拒掉绝对路径 / .. / 非 .json');
-  ok(host.plainValue(host.Config({ seatsFile: 'dispatch/seats.json', repoRoot: repo }).seatsFile) === 'dispatch/seats.json', '④ 合法相对路径照常放行');
-  // volatile 字段在装了 schemastery 的环境里会被包成 { get() }，没装则是裸值 —— 两种都得能用。
-  // 这条钉住 plainValue：否则同一个包在「裸 checkout」与「真装依赖」两种环境里给出相反结论。
+    'Config 的 seatsFile 约束拒掉绝对路径 / .. / 非 .json');
+  const defCfg = host.Config({ repoRoot: repo });
+  ok(host.plainValue(defCfg.seatsFile) === 'dispatch/seats.json'
+    && host.plainValue(defCfg.divergeCount) === ''
+    && host.plainValue(defCfg.divergeUseDeadEnds) === '',
+    'Config 默认值（seatsFile=dispatch/seats.json，divergeCount/divergeUseDeadEnds 均为空串跟随 seats.json）齐全');
   ok(host.plainValue({ get: () => 'dispatch/seats.json' }) === 'dispatch/seats.json'
     && host.plainValue('dispatch/seats.json') === 'dispatch/seats.json'
     && host.plainValue(undefined) === undefined,
-    '④ volatile 包装与裸值都被 plainValue 正确解开');
-  // v2.0.0：同 Agent 多票（codex:gpt-5,codex:o3）在面板不吞票，发散执行者全解锁（claude / gemini 等不再标暂未接通）
-  mount({ remote: { settings: { describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 9, user: {}, value: Object.assign({}, FULL_VALUE, { reviewVotes: 'codex:gpt-5,codex:o3', divergeCommand: 'claude', divergeModel: 'claude-sonnet-4-5' }), schema: REAL_SCHEMA }] } }), update: async () => ({ ok: true, value: {} }) } } });
-  const multiPage = await settle(render());
-  ok(multiPage.texts.filter((t) => /^票 \d+$/.test(t)).length === 2,
-    'v2.0.0 同 Agent 多票（codex:gpt-5,codex:o3）完整渲染两行，不被按席位名去重吞掉');
-  ok(multiPage.texts.join('').includes('claude · claude-sonnet-4-5') && !multiPage.texts.some((t) => t.includes('暂未接通')),
-    'v2.0.0 发散环节可选 claude / gemini 等全量执行者，不再锁死或标「暂未接通」');
+    'plainValue 兼容 volatile 包装与裸值');
 
+  if (prevDiag === undefined) delete process.env.RESEARCH_DISPATCH_DIAG; else process.env.RESEARCH_DISPATCH_DIAG = prevDiag;
+  if (prevDshHome === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevDshHome;
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

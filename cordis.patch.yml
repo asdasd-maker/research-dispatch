@@ -1,8 +1,9 @@
 # DSH 插件装配：将 research-dispatch 作为 loader entry 插入当前 profile。
 #
 # entry 的 id 即设置面板读写的配置命名空间名（与 lib/index.js 导出的 Config 对齐）。
-# 本文件中的 config 仅在 DSH 宿主内部生效（useDshPatch: true），不会跨宿主覆盖外部终端或
-# Antigravity / Claude Code / Codex / Cursor 工作区下的 dispatch/seats.json 单一真源。
+# 在 DSH「科研派工」面板点击保存时，插件除了叠加当前宿主内的运行时配置（useDshPatch: true），
+# 还会通过 syncPanelLineupToSeats 将四阶段阵容（文献调研 / 想法发散 / 多票评审 / 前置查重）
+# 自动写穿同步至所选项目的 dispatch/seats.json（lineup 段），保留手写 seats 属性不变。
 - insert:
     - id: research-dispatch
       name: research-dispatch
