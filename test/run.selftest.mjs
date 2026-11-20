@@ -408,11 +408,14 @@ try {
     assert.ok(r.out.includes('陈旧锁'), '要说清这是陈旧锁，实得：' + r.out.slice(0, 400));
     assert.ok(!fs.existsSync(lockPath(fx8.root, fx8.id)), '本轮结束后锁不该残留');
   });
-  t('旧版空锁（读不出 pid）→ 也按陈旧锁清掉', () => {
-    fs.writeFileSync(lockPath(fx8.root, fx8.id), '');
+  t('旧版空锁（读不出 pid 且超过宽限期）→ 也按陈旧锁清掉', () => {
+    const emptyLock = lockPath(fx8.root, fx8.id);
+    fs.writeFileSync(emptyLock, '');
+    const past = new Date(Date.now() - 5000);
+    fs.utimesSync(emptyLock, past, past);
     const r = runDispatch(fx8.root, ['run', 'ideas/briefs/idea_01.md']);
     assert.ok(r.out.includes('陈旧锁'), '空锁也该被认出来');
-    assert.ok(!fs.existsSync(lockPath(fx8.root, fx8.id)), '不该残留');
+    assert.ok(!fs.existsSync(emptyLock), '不该残留');
   });
   t('活锁（pid 还活着）→ 退 2 且不删，文案带持有者信息', () => {
     const live = lockPath(fx8.root, fx8.id);

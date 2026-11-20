@@ -24,9 +24,9 @@ description: Universal pure-Node AI research workflow wizard (research-dispatch 
 2. **探测五大 CLI 执行者与四阶段阵容（`agents` & `lineup`）**：
    - 工具调用：`research_dispatch({ action: "agents" })` 或 `npx research-dispatch agents`。
    - 引擎深度扫描本机已安装的五大 CLI 执行者（`codex`、`claude`、`dsh`、`agy` Antigravity、`kimi` Kimi Code）及其本地配置文件与模型缓存目录，透明展示四阶段阵容（`scout` 文献调研、`diverge` 想法发散、`review` 多票盲审、`novelty` 前置查重）。
-   - 需要调整阵容或发散默认策略时，运行：
-     `npx research-dispatch lineup [--scout <seat[:model]>] [--diverge <seat[:model]>] [--diverge-count <N>] [--use-dead-ends | --no-dead-ends] [--review <seat[:model],...>] [--novelty <seat[:model]>]`
-     更新项目唯一真源 `dispatch/seats.json`（在 DSH 桌面端「科研派工 · 全流程阵容」面板点击保存也会自动写穿同步至该文件）。
+   - 需要调整阵容、思考强度（`@low|medium|high|xhigh|max`）或发散默认策略时，运行：
+     `npx research-dispatch lineup [--scout <seat[:model][@effort]>] [--diverge <seat[:model][@effort]>] [--diverge-count <N>] [--use-dead-ends | --no-dead-ends] [--review <seat[:model][@effort],...>] [--novelty <seat[:model][@effort]>]`
+     更新项目唯一真源 `dispatch/seats.json`（单次运行可用 `--effort <tier|default>` 覆盖或显式清除继承；在 DSH 桌面端「科研派工 · 全流程阵容」面板点击保存也会自动写穿同步至该文件）。
 
 ---
 

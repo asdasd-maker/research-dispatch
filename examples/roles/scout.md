@@ -8,8 +8,13 @@
 
 围绕目标研究问题，分两层完成进料：
 
-1. **广度建卡（落盘 `papers/cards/<slug>.md`）**：检索真正相关的论文，每篇独立写一张结构化 YAML 卡；只负责客观抽取，不做主观吹捧或评审。
+1. **广度建卡**：检索真正相关的论文，每篇独立输出一张结构化 YAML 卡；只负责客观抽取，不做主观吹捧或评审。
 2. **窄选 Top 5 近邻提示（供主会话精读定锚）**：完成建卡后，向主会话指明与本问题最直接竞争或最适合作为实验基线的 **Top 3–5 篇核心近邻**（优先有开源代码与清晰评测基准的工作），供主会话进一步精读其方法细节与实验主表（提取具体指标数值、数据集切分与训练卡时预算）。
+
+## 两种调用方式的输出与落盘契约（严禁混淆）
+
+- **CLI 派工模式（由 `npx research-dispatch scout` 在仓外临时目录启动）**：**严禁自行写盘或运行 `pool`**；请直接将全部卡片按 `=== CARD: <slug>.md ===` 分隔输出到标准输出（Top 3–5 精读建议置于文末 `=== SUMMARY ===` 后），由主控调度器统一切卡、经 `checkPaperCard` 校验后落盘 `papers/cards/<slug>.md` 并拼装 `_pool.md`。
+- **交互式子任务模式（主会话直接委派带写权限的 Subagent）**：在项目根目录直接将每张卡片落盘为 `papers/cards/<slug>.md`，完成后运行 `npx research-dispatch pool` 统一校验入池。
 
 ## 行为约束
 
@@ -35,4 +40,5 @@ intro_key: "<该工作针对的具体痛点与核心切入机制，1-2 句>"
 relevance: "<与当前研究问题的直接关联或边界差异，1 句>"
 ```
 
-写完卡片后运行 `npx research-dispatch pool`（或直接通过 `npx research-dispatch scout "<调研方向>" [篇数] --pool` 派工调研并自动切卡校验入池）即可完成逐卡结构校验（`check-paper`）并拼装 `papers/cards/_pool.md`。
+- **交互式子任务模式**：写完卡片后运行 `npx research-dispatch pool` 完成逐卡结构校验（`check-paper`）并拼装 `papers/cards/_pool.md`。
+- **CLI 派工模式**：由主控运行 `npx research-dispatch scout "<调研方向>" [篇数] --pool` 自动切卡校验入池，Worker 自身严禁写盘或执行 `pool`。

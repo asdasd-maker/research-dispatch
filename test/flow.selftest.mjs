@@ -145,8 +145,13 @@ try {
     '#!/usr/bin/env bash\nprintf \'%s\' "$1" > argv1.txt\nprintf \'DRY=%s\' "${DRY:-}" > env.txt\nexit 0\n',
     { mode: 0o755 });
   const NASTY = 'x$(touch PWNED).md `touch PWNED2` a\'b"c;d e 中文 换行\n第二行.md';
-  await ta('注入串逐字节进 fanout（argv1 与传入值完全相同）', async () => {
+  await ta('默认只读 preview 不执行工作区未授权 dispatch/fanout.sh 脚本（N9 安全加固）', async () => {
     const r = await ft.dispatchFlow({ action: 'preview', brief: NASTY }, { repoRoot: inj });
+    assert.equal(r.ok, false);
+    assert.ok(!fs.existsSync(path.join(inj, 'argv1.txt')), '默认模式严禁执行工作区 dispatch/fanout.sh');
+  });
+  await ta('显式开启 allowLegacyShell 时，注入串逐字节进 fanout（argv1 与传入值完全相同）', async () => {
+    const r = await ft.dispatchFlow({ action: 'preview', brief: NASTY }, { repoRoot: inj, allowLegacyShell: true });
     assert.equal(r.ok, true, 'preview 应成功，实得：' + JSON.stringify(r).slice(0, 400));
     const got = fs.readFileSync(path.join(inj, 'argv1.txt'), 'utf8');
     assert.equal(got, NASTY, 'argv1 与传入值不等：' + JSON.stringify(got));
@@ -219,9 +224,9 @@ try {
     assert.ok(res.warnings.some((w) => w.includes('DSH_DISPATCH_BASH') && w.includes('不存在')),
       '实得：' + JSON.stringify(res.warnings));
   });
-  await ta('bash 不可用时 status 回 bash-unavailable（不是 rc:1 加 UTF-16 乱码）', async () => {
+  await ta('显式 allowLegacyShell 且 bash 不可用时 status 回 bash-unavailable（不是 rc:1 加 UTF-16 乱码）', async () => {
     const r = await ft.dispatchFlow({ action: 'status' },
-      { repoRoot: st, bash: { ok: false, reason: 'bash-unavailable', detail: 'PATH 首选 bash 是 system32 下的 WSL 转发器：X', hint: '设置 DSH_DISPATCH_BASH 指向 Git Bash 完整路径' } });
+      { repoRoot: st, allowLegacyShell: true, bash: { ok: false, reason: 'bash-unavailable', detail: 'PATH 首选 bash 是 system32 下的 WSL 转发器：X', hint: '设置 DSH_DISPATCH_BASH 指向 Git Bash 完整路径' } });
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'bash-unavailable');
     assert.equal(r.rc, undefined, '不该伪装成脚本自己退 1');

@@ -31,7 +31,8 @@ const ft = await import(pathToFileURL(path.join(SRC, 'lib', 'flow-tools.mjs')).h
 const wf = await import(pathToFileURL(path.join(SRC, 'lib', 'workflow.mjs')).href);
 const ps = await import(pathToFileURL(path.join(SRC, 'lib', 'pilot-stats.mjs')).href);
 const val = await import(pathToFileURL(path.join(SRC, 'lib', 'validators.mjs')).href);
-const { buildDshModelOverrideFiles } = await import(pathToFileURL(path.join(SRC, 'lib', 'run.mjs')).href);
+const runMod = await import(pathToFileURL(path.join(SRC, 'lib', 'run.mjs')).href);
+const { buildDshModelOverrideFiles } = runMod;
 const tel = await import(pathToFileURL(path.join(SRC, 'lib', 'telemetry.mjs')).href);
 
 let checks = 0;
@@ -1299,10 +1300,15 @@ try {
     fs.mkdirSync(briefsDir, { recursive: true });
     fs.mkdirSync(cardsDir, { recursive: true });
 
+    const briefShaOf = (id) => {
+      const txt = fs.readFileSync(path.join(briefsDir, id + '.md'), 'utf8').replace(/\r\n/g, '\n');
+      return crypto.createHash('sha256').update(txt, 'utf8').digest('hex').slice(0, 12);
+    };
+
     const writeScoredVote = (id, seatTag, model, verdict, scores5d, conf) => {
       const [nov, fea, fit, cost, gain] = scores5d;
       const body = [
-        '<!-- meta role=reviewer seat=' + seatTag + ' model=' + model + ' -->',
+        '<!-- meta role=reviewer seat=' + seatTag + ' model=' + model + ' sha=' + briefShaOf(id) + ' -->',
         '```yaml',
         'idea_id: ' + id,
         'novelty: {score: ' + nov + ', reason: "新颖度评估"}',
@@ -1321,9 +1327,11 @@ try {
     };
 
     const writeManifest = (id, seatsSpec) => {
+      const seatTags = String(seatsSpec).split(',').map((s) => s.split('=')[0].trim()).filter(Boolean).join(' ');
       fs.writeFileSync(path.join(cardsDir, id + '.manifest'), [
-        '<!-- manifest schema=2 idea=' + id + ' status=OK -->',
+        '<!-- manifest schema=2 idea=' + id + ' sha=' + briefShaOf(id) + ' status=OK -->',
         'status: OK',
+        'votes: ' + seatTags,
         'seats: ' + seatsSpec,
         '',
       ].join('\n'), 'utf8');
@@ -1364,7 +1372,7 @@ try {
     assert.deepEqual(
       sumObj.items.map((it) => it.id),
       ['idea_03', 'idea_02', 'idea_01', 'idea_04', 'smoke_01'],
-      '默认应按 go 票数 → kill 升序 → avgTotal25 降序排定正式工单，UNRUN 与校准单置尾',
+      '默认应按五维 /25 均分降序为主序（平分按 go 降序 → kill 升序）排定正式工单，UNRUN 与校准单置尾',
     );
     assert.equal(sumObj.items[0].rank, 1);
     assert.equal(sumObj.items[0].avgTotal25, 22.5);
@@ -1551,6 +1559,1073 @@ try {
     assert.equal(vRes.ok, true);
     const swarmAfterGo = tel.buildSwarmSnapshot(v21Ws, { topic: v21Topic, focusStage: 'S6', focusIdeaId: 'idea_01' });
     assert.ok(swarmAfterGo.ideas.some((i) => i.ideaId === 'idea_01' && i.verdict === 'go'), '人类拍板 GO 后拓扑盘面实时同步');
+
+    // v2.3.1 CLI 全阶段 effort 编排与 --dry 透传 / kimi 安全忽略回归
+    const rEffLineup = runCli(v21Ws, [
+      'lineup',
+      '--scout', 'codex:gpt-5',
+      '--scout-effort', 'high',
+      '--diverge', 'claude:claude-sonnet-4-5@xhigh',
+      '--review', 'codex:gpt-5@medium,agy:gemini-4-carbon-high,kimi:kimi-k2.5@high',
+      '--novelty', 'agy:claude-opus-4-6@high',
+      '--json',
+    ]);
+    assert.equal(rEffLineup.rc, 0, rEffLineup.out);
+    const effUpd = JSON.parse(rEffLineup.stdout);
+    assert.equal(effUpd.lineup.scout.effort, 'high');
+    assert.equal(effUpd.lineup.diverge.effort, 'xhigh');
+    assert.equal(effUpd.lineup.review[0].effort, 'medium');
+    assert.equal(effUpd.lineup.novelty.effort, 'high');
+
+    const rPlanEff = runCli(v21Ws, ['plan', 'ideas/' + v21Topic + '/briefs/idea_01.md']);
+    assert.equal(rPlanEff.rc, 0, rPlanEff.out);
+    const planEffObj = JSON.parse(rPlanEff.stdout);
+    assert.equal(planEffObj.plan[0].effort, 'medium');
+
+    const rDryScoutEff = runCli(v21Ws, ['scout', 'test query', '1', '--dry']);
+    assert.equal(rDryScoutEff.rc, 0, rDryScoutEff.out);
+    assert.ok(rDryScoutEff.stdout.includes('effort=high'), 'scout --dry 应透传 effort=high：\n' + rDryScoutEff.out);
+
+    const rDryDivEff = runCli(v21Ws, ['diverge', 'test dir', '5', '--topic', v21Topic, '--baseline', 'baselines/b1', '--dry']);
+    assert.equal(rDryDivEff.rc, 0, rDryDivEff.out);
+    assert.ok(rDryDivEff.stdout.includes('effort=xhigh'), 'diverge --dry 应透传 effort=xhigh：\n' + rDryDivEff.out);
+
+    // 不支持的 kimi 座位即使传入 effort 也安全忽略不报错
+    const rDryKimiEff = runCli(v21Ws, ['scout', 'test query', '1', '--agent', 'kimi:kimi-k2.5', '--effort', 'high', '--dry']);
+    assert.equal(rDryKimiEff.rc, 0, '不支持的 kimi 传 effort 应安全忽略退 0：\n' + rDryKimiEff.out);
+    const kimiDryLine = rDryKimiEff.stdout.split(/\r?\n/).find((l) => l.includes('[dry]')) || '';
+    assert.ok(rDryKimiEff.stdout.includes('已安全忽略') && !kimiDryLine.includes('effort='), 'kimi --dry 应给出安全忽略提示且不透传 effort：\n' + rDryKimiEff.out);
+  });
+
+  await ta('S9 [Codex 复审 4 批闭环回归] 排序冲突样本 / 严格验票 / 裁决版本锁 / 桌面 S6 冻结真源 / 重复票位 / Pilot 状态 / effort 清除', async () => {
+    const regMod = await import('../lib/registry.mjs');
+    const regWs = mkTmp('codex-audit-reg');
+    const rTopic = 'audit-verify';
+    assert.equal(runCli(regWs, ['init', '--topic', rTopic]).rc, 0);
+    assert.ok(fs.existsSync(path.join(regWs, 'dispatch', 'dsh-review.patch.yml')), 'P2-23：init 应同时生成 dispatch/dsh-review.patch.yml');
+
+    // 1) N19 & P1-09 & N11：少 go 高 /25 分 应排在 多 go 低 /25 分 之前；缺维卡、失配 SHA、UNKNOWN manifest 不入榜且桌面与 CLI 名次完全一致
+    const bDir = path.join(regWs, 'ideas', rTopic, 'briefs');
+    const cDir = path.join(regWs, 'ideas', rTopic, 'cards');
+    const writeB = (id, text) => {
+      const body = '<!-- meta role=brief idea=' + id + ' anchor=none -->\n### Idea\n' + text + '\n';
+      fs.writeFileSync(path.join(bDir, id + '.md'), body, 'utf8');
+      return crypto.createHash('sha256').update(body.replace(/\r\n/g, '\n'), 'utf8').digest('hex').slice(0, 12);
+    };
+    const writeCard = (id, tag, verdict, scores, extraMeta = '') => {
+      const [n, f, fit, c, g] = scores;
+      const dimLines = [];
+      if (n !== null) dimLines.push('novelty: {score: ' + n + ', reason: "新颖度充分"}');
+      if (f !== null) dimLines.push('feasibility: {score: ' + f + ', reason: "实现可行"}');
+      if (fit !== null) dimLines.push('baseline_fit: {score: ' + fit + ', reason: "贴合基线"}');
+      if (c !== null) dimLines.push('impl_cost: {score: ' + c + ', reason: "轻量低成本"}');
+      if (g !== null) dimLines.push('expected_gain: {score: ' + g + ', reason: "预期收益明确"}');
+      fs.writeFileSync(path.join(cDir, id + '.' + tag + '.md'), [
+        '<!-- meta backend=' + tag + ' model=gpt-5' + (extraMeta ? ' ' + extraMeta : '') + ' -->',
+        '```yaml',
+        'idea_id: ' + id,
+        ...dimLines,
+        'verdict: ' + verdict,
+        'kill_reason: ' + (verdict === 'kill' ? '"明确证伪缺陷"' : 'null'),
+        'confidence: 0.85',
+        'missing_info: []',
+        '```',
+        '',
+      ].join('\n'), 'utf8');
+    };
+
+    const sha01 = writeB('idea_01', '少 go 高分候选');
+    const sha02 = writeB('idea_02', '多 go 低分候选');
+    const sha03 = writeB('idea_03', '缺维坏卡候选');
+    const sha04 = writeB('idea_04', '失配 SHA 候选');
+    const sha05 = writeB('idea_05', '未知状态 manifest 候选');
+
+    // idea_01: 1 go (23/25)
+    writeCard('idea_01', 'codex', 'go', [5, 5, 4, 5, 4], 'sha=' + sha01);
+    fs.writeFileSync(path.join(cDir, 'idea_01.manifest'), '<!-- manifest schema=2 idea=idea_01 sha=' + sha01 + ' status=OK(single-vote codex) -->\nvotes: codex\n', 'utf8');
+
+    // idea_02: 2 go (18/25 + 18/25 = 18/25)
+    writeCard('idea_02', 'codex', 'go', [4, 4, 3, 4, 3], 'sha=' + sha02);
+    writeCard('idea_02', 'claude', 'go', [4, 3, 4, 4, 3], 'sha=' + sha02);
+    fs.writeFileSync(path.join(cDir, 'idea_02.manifest'), '<!-- manifest schema=2 idea=idea_02 sha=' + sha02 + ' status=OK -->\nvotes: codex claude\n', 'utf8');
+
+    // idea_03: 仅缺 1 维（4 维）→ checkCardFile 拒收，不得计 go 票也不得上榜
+    writeCard('idea_03', 'codex', 'go', [5, 5, 5, 5, null], 'sha=' + sha03);
+    fs.writeFileSync(path.join(cDir, 'idea_03.manifest'), '<!-- manifest schema=2 idea=idea_03 sha=' + sha03 + ' status=OK -->\nvotes: codex\n', 'utf8');
+
+    // idea_04: manifest sha 与当前 brief sha 不一致 → 不得上榜
+    writeCard('idea_04', 'codex', 'go', [5, 5, 5, 5, 5], 'sha=' + sha04);
+    fs.writeFileSync(path.join(cDir, 'idea_04.manifest'), '<!-- manifest schema=2 idea=idea_04 sha=deadbeef0000 status=OK -->\nvotes: codex\n', 'utf8');
+
+    // idea_05: manifest status=UNKNOWN → 不得上榜
+    writeCard('idea_05', 'codex', 'go', [5, 5, 5, 5, 5], 'sha=' + sha05);
+    fs.writeFileSync(path.join(cDir, 'idea_05.manifest'), '<!-- manifest schema=2 idea=idea_05 sha=' + sha05 + ' status=UNKNOWN -->\nvotes: codex\n', 'utf8');
+
+    const sum = val.summarizeTopic(regWs, { topic: rTopic, writeFile: false });
+    assert.equal(sum.ok, true);
+    const byId = new Map(sum.items.map((x) => [x.rawId, x]));
+    assert.equal(byId.get('idea_01').rank, 1, '1 go @ 23/25 应按 /25 主序排在 2 go @ 18/25 前面（#1）');
+    assert.equal(byId.get('idea_02').rank, 2, '2 go @ 18/25 应排 #2');
+    assert.equal(byId.get('idea_03').rank, null, '仅含缺维卡的候选不得获得名次');
+    assert.equal(byId.get('idea_03').counts.go, 0, '缺维卡不得计入 go 票数');
+    assert.equal(byId.get('idea_04').rank, null, 'manifest brief SHA 失配候选不得上榜');
+    assert.equal(byId.get('idea_05').rank, null, 'status=UNKNOWN 候选不得上榜');
+
+    const snap = tel.buildSwarmSnapshot(regWs, { topic: rTopic });
+    const snapById = new Map(snap.ideas.map((x) => [x.ideaId, x]));
+    assert.equal(snapById.get('idea_01').rank, 1, 'N11：桌面快照排名必须与 CLI summarizeTopic 完全一致');
+    assert.equal(snapById.get('idea_02').rank, 2);
+    assert.equal(snapById.get('idea_03').rank, null);
+    assert.equal(snapById.get('idea_04').rank, null);
+    assert.equal(snapById.get('idea_05').rank, null);
+
+    // 2) N2：裁决必须绑定存在的工单与审阅时 briefSha
+    const vMissing = tel.writeHumanVerdict(regWs, { topic: rTopic, ideaId: 'idea_99', decision: 'go' });
+    assert.equal(vMissing.ok, false);
+    assert.equal(vMissing.code, 'BRIEF_NOT_FOUND');
+
+    const vStale = tel.writeHumanVerdict(regWs, { topic: rTopic, ideaId: 'idea_01', decision: 'go', expectedBriefSha: '000000000000' });
+    assert.equal(vStale.ok, false);
+    assert.equal(vStale.code, 'BRIEF_CHANGED');
+
+    const vOk = tel.writeHumanVerdict(regWs, { topic: rTopic, ideaId: 'idea_01', decision: 'go', expectedBriefSha: snapById.get('idea_01').sha });
+    assert.equal(vOk.ok, true);
+    assert.ok(fs.readFileSync(path.join(regWs, vOk.verdictRel), 'utf8').includes('brief_sha: ' + vOk.briefSha));
+
+    // 3) P1-13 & N3：§5 中的 SIGNOFF: PASS 不得通过 checkAnchor；同内容未登记的另一契约文件在桌面不得显示已冻结
+    const badBase = path.join(regWs, 'baselines', 'bad-s5');
+    fs.mkdirSync(badBase, { recursive: true });
+    fs.writeFileSync(path.join(badBase, 'REPRO.md'), [
+      '## §3 关键指标',
+      '| Metric | 论文 | 我复现 | 容差 |',
+      '|---|---|---|---|',
+      '| Acc | 78.4 | 78.4 | 0.3 |',
+      '## §4 人工签字',
+      '尚未签字',
+      '## §5 备注',
+      'SIGNOFF: PASS',
+      '',
+    ].join('\n'), 'utf8');
+    assert.equal(val.checkAnchor(regWs, 'baselines/bad-s5').ok, false, 'P1-13：§5 中的 SIGNOFF: PASS 绝不得算 §4 已签字');
+
+    const cTemplate = [
+      '## §0 元信息',
+      '- exp_id: exp_freeze_check',
+      '- baseline: none',
+      '- 数据集与 split: MathVista testmini (1000)',
+      '## §1 Hypothesis',
+      '采用门控剪枝后 Acc >= 79.6% (+1.2pp)。',
+      '## §2 实现锚点',
+      '- 超参: lr=1e-6, kl=0.01',
+      '- metric: MathVista Acc',
+      '- 计算预算: 4xA800 2h',
+      '- 代码对应: train/gate.py',
+      '## §3 成功信号',
+      '- S1: MathVista Acc >= 79.6%（越过 2σ = 0.6pp）',
+      '## §4 失败信号',
+      '- F1: 推理合规率下降超过 3.0pp 或长度膨胀 >= 25%',
+      '## §5 Ablation 消融预期',
+      '| Ablation | 预期看到什么 | 若看到相反结果说明什么 |',
+      '|---|---|---|',
+      '| 去掉熵门控 | Acc 跌回 78.4% | 说明收益来自训练步数而非熵门控 |',
+      '## §6 防事后合理化条款',
+      '开跑前锁定，不动成功线。',
+      '',
+    ].join('\n');
+    const c1 = path.join(regWs, 'contract', 'exp_a.v1.md');
+    const c2 = path.join(regWs, 'contract', 'exp_clone.v1.md');
+    fs.writeFileSync(c1, cTemplate, 'utf8');
+    fs.writeFileSync(c2, cTemplate, 'utf8');
+    assert.equal(wf.checkContractFile(c1, { rootDir: regWs, record: true }).ok, true);
+    const snapC = tel.buildSwarmSnapshot(regWs, { topic: rTopic });
+    const sc1 = snapC.contracts.find((x) => x.id === 'exp_a.v1');
+    const sc2 = snapC.contracts.find((x) => x.id === 'exp_clone.v1');
+    assert.equal(sc1 && sc1.frozen, true, '已登记的 exp_a.v1 应显示已冻结');
+    assert.equal(sc2 && sc2.frozen, false, 'N3：内容相同但未登记的 exp_clone.v1 绝不得被桌面判为已冻结');
+
+    // 非法非路径基线名在 checkContractFile 中必须报错
+    const cBadBase = path.join(regWs, 'contract', 'exp_badbase.v1.md');
+    fs.writeFileSync(cBadBase, cTemplate.replace('- baseline: none', '- baseline: nonexistent_baseline_slug'), 'utf8');
+    assert.equal(wf.checkContractFile(cBadBase, { rootDir: regWs, record: false }).ok, false, 'P1-13：不存在的基线词条必须被拒');
+
+    // 4) N5：不同 seat 显式重复票位 ID（忽略大小写）被拦截
+    const cfgObj = regMod.loadConfig(regWs);
+    cfgObj.lineup = { review: [{ id: 'Vote', seat: 'codex' }, { id: 'vote', seat: 'claude' }] };
+    const dupPlan = regMod.resolveExecutionPlan(cfgObj, { useDshPatch: false });
+    assert.equal(dupPlan.ok, false, 'N5：大小写等价的重复显式票位 ID 必须被拦');
+
+    // 5) P1-15：非法 effort 显式报错，default 置 effortCleared=true
+    cfgObj.lineup = { scout: { seat: 'codex', model: 'gpt-5', effort: 'high' } };
+    const badEff = regMod.resolveStagePlan(cfgObj, 'scout', { effort: 'turbo-invalid', useDshPatch: false });
+    assert.equal(badEff.ok, false);
+    assert.equal(badEff.code, 'INVALID_EFFORT');
+    const clrEff = regMod.resolveStagePlan(cfgObj, 'scout', { effort: 'default', useDshPatch: false });
+    assert.equal(clrEff.ok, true);
+    assert.equal(clrEff.effort, '');
+    assert.equal(clrEff.effortCleared, true);
+
+    // 6) N8, N12, N18：Pilot 统计零增益/恒差/单题簇与内部字段清理
+    const zeroA = Array.from({ length: 8 }, (_, i) => ({ item_id: 'q' + i, rollout_id: 0, correct: 1, compliant: true }));
+    const zeroStats = ps.computePairedStats(zeroA, zeroA, { compliantField: 'compliant' });
+    assert.equal(zeroStats.mde_status, 'ZERO_EFFECT');
+    assert.equal(zeroStats.exceeds_2sigma_mde, false);
+    assert.equal('_raw_delta' in zeroStats.generation, false);
+    assert.equal('_raw_delta' in zeroStats.compliant_subset.paired, false, 'N18：合规子集不得泄出 _raw_delta');
+
+    const constA = Array.from({ length: 6 }, (_, i) => ({ item_id: 'q' + i, rollout_id: 0, score: 0.25 }));
+    const constB = Array.from({ length: 6 }, (_, i) => ({ item_id: 'q' + i, rollout_id: 0, score: 0.50 }));
+    const constStats = ps.computePairedStats(constA, constB);
+    assert.equal(constStats.mde_status, 'SE_UNESTIMABLE', 'N12：零 SE 非零恒差应返回 SE_UNESTIMABLE');
+    assert.ok(!ps.formatPairedStatsReport(constStats).includes('BELOW_MDE'), 'N12：零 SE 非零恒差报告不得称作 BELOW_MDE');
+
+    const singleItemA = Array.from({ length: 16 }, (_, r) => ({ item_id: 'only_q', rollout: r, correct: 0 }));
+    const singleItemB = Array.from({ length: 16 }, (_, r) => ({ item_id: 'only_q', rollout: r, correct: 1 }));
+    const singleStats = ps.computePairedStats(singleItemA, singleItemB);
+    assert.equal(singleStats.bootstrap_ci95_pp, null, 'N8：单独立题簇不得伪造 [100,100] 跨题 CI');
+    assert.equal(singleStats.item_level_mde_status, 'SE_UNESTIMABLE', 'N8：单独立题簇跨题门槛应为 SE_UNESTIMABLE');
+  });
+
+  await ta('S10 [Codex 终审放行门槛全覆盖] P0 无脚本 preview / 缺失证据 fail-closed / 模板与过期裁决 / 统一文件锁 / 默认课题对齐 / 极小效应量', async () => {
+    const fl = await import('../lib/file-lock.mjs');
+    const regMod = await import('../lib/registry.mjs');
+
+    // 1) P0 #1：默认桌面 preview 即使工作区含 dispatch/anchor_check.sh 与 dispatch/check_card.py，也绝不执行
+    const p0Ws = mkTmp('p0-no-ws-scripts');
+    assert.equal(runCli(p0Ws, ['init', '--topic', 'sec-demo']).rc, 0);
+    const p0SeatsPath = path.join(p0Ws, 'dispatch', 'seats.json');
+    const p0Seats = JSON.parse(fs.readFileSync(p0SeatsPath, 'utf8'));
+    p0Seats.default_backends = ['node_seat'];
+    p0Seats.lineup = { ...(p0Seats.lineup || {}), review: [{ seat: 'node_seat', model: '' }] };
+    p0Seats.seats.push({
+      id: 'node_seat',
+      kind: 'cli',
+      enabled: true,
+      command: process.execPath,
+      argv: ['-e', 'process.exit(0)'],
+      payload_position: 'stdin',
+      output: 'stdout',
+      identity: { kind: 'static', model: 'mock-node-1' },
+    });
+    fs.writeFileSync(p0SeatsPath, JSON.stringify(p0Seats, null, 2) + '\n', 'utf8');
+    const p0Base = path.join(p0Ws, 'baselines', 'sec-base');
+    fs.mkdirSync(p0Base, { recursive: true });
+    fs.writeFileSync(path.join(p0Base, 'BRIEF_BLOCK.md'), '# Baseline Anchor\nAcc=70.0\n', 'utf8');
+    fs.writeFileSync(path.join(p0Base, 'REPRO.md'), [
+      '## §3 关键指标',
+      '| Metric | 论文 | 我复现 | 容差 |',
+      '|---|---|---|---|',
+      '| Acc | 70.0 | 70.0 | 0.2 |',
+      '## §4 人工签字',
+      'SIGNOFF: PASS',
+      '',
+    ].join('\n'), 'utf8');
+    const p0BriefRel = 'ideas/sec-demo/briefs/idea_01.md';
+    fs.writeFileSync(
+      path.join(p0Ws, p0BriefRel),
+      '<!-- meta role=brief idea=idea_01 anchor=baselines/sec-base -->\n### Baseline\nAcc = 70.0\n\n### Idea\n验证 preview 不执行工作区脚本\n',
+      'utf8',
+    );
+    const p0Sentinel = path.join(p0Ws, 'P0_SCRIPT_EXECUTED');
+    fs.writeFileSync(
+      path.join(p0Ws, 'dispatch', 'anchor_check.sh'),
+      '#!/usr/bin/env bash\necho PWNED > "' + p0Sentinel.replace(/\\/g, '/') + '"\nexit 0\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(p0Ws, 'dispatch', 'check_card.py'),
+      'open(' + JSON.stringify(p0Sentinel) + ', "w").write("PWNED")\n',
+      'utf8',
+    );
+    const prevRes = await ft.dispatchFlow(
+      { action: 'preview', brief: p0BriefRel },
+      { repoRoot: p0Ws, useDshPatch: false },
+    );
+    assert.equal(prevRes.ok, true, 'P0 #1：纯 Node preview 应成功通过内置 checkAnchor，实得：' + JSON.stringify(prevRes));
+    assert.equal(fs.existsSync(p0Sentinel), false, 'P0 #1：默认 preview 绝不得执行工作区 dispatch/anchor_check.sh 或 check_card.py');
+
+    // 2) P1 #1 & #2：正对照合格卡正常上榜；缺 sha、votes: none（含诊断行）、VOID、缺失 brief 一律 fail-closed（rank=null, go=0）
+    const p1Ws = mkTmp('p1-fail-closed');
+    assert.equal(runCli(p1Ws, ['init', '--topic', 'fc']).rc, 0);
+    const fcBriefs = path.join(p1Ws, 'ideas', 'fc', 'briefs');
+    const fcCards = path.join(p1Ws, 'ideas', 'fc', 'cards');
+    const mkCardText = (id, extraMeta = '') => [
+      '<!-- meta role=reviewer seat=codex model=gpt-5' + (extraMeta ? ' ' + extraMeta : '') + ' -->',
+      '```yaml',
+      'idea_id: ' + id,
+      'novelty: {score: 5, reason: "创新切入机制清晰且区别于现有基线"}',
+      'feasibility: {score: 5, reason: "单卡两小时内可完成探针复核"}',
+      'baseline_fit: {score: 5, reason: "零侵入挂载当前复现基线"}',
+      'impl_cost: {score: 5, reason: "仅修改不到五十行代码"}',
+      'expected_gain: {score: 5, reason: "预期收益明确越过两倍噪声下限"}',
+      'verdict: go',
+      'kill_reason: null',
+      'confidence: 0.9',
+      'missing_info: []',
+      '```',
+      '',
+    ].join('\n');
+
+    // 正对照 idea_valid：合格卡 + 匹配 sha + OK + votes: codex -> 必须真实获得 rank=1, go=1
+    const okText = '<!-- meta role=brief idea=idea_valid -->\n### Idea\n正对照合格方案\n';
+    const okSha = crypto.createHash('sha256').update(okText, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(fcBriefs, 'idea_valid.md'), okText, 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_valid.codex.md'), mkCardText('idea_valid', 'sha=' + okSha), 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_valid.manifest'), '<!-- manifest schema=2 idea=idea_valid sha=' + okSha + ' status=OK -->\nvotes: codex\ncodex → verdict: go\n', 'utf8');
+
+    // idea_nosha: manifest 和 card 都缺 sha
+    fs.writeFileSync(path.join(fcBriefs, 'idea_nosha.md'), '<!-- meta role=brief idea=idea_nosha -->\n### Idea\nA\n', 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_nosha.codex.md'), mkCardText('idea_nosha'), 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_nosha.manifest'), '<!-- manifest schema=2 idea=idea_nosha status=OK -->\nvotes: codex\n', 'utf8');
+
+    // idea_novotes: manifest sha 对但 votes: none 且带诊断行 `codex → verdict: go`（绝不可回退诊断行恢复有效票）
+    const nvText = '<!-- meta role=brief idea=idea_novotes -->\n### Idea\nB\n';
+    const nvSha = crypto.createHash('sha256').update(nvText, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(fcBriefs, 'idea_novotes.md'), nvText, 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_novotes.codex.md'), mkCardText('idea_novotes', 'sha=' + nvSha), 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_novotes.manifest'), '<!-- manifest schema=2 idea=idea_novotes sha=' + nvSha + ' status=OK -->\nvotes: none\ncodex → verdict: go\n', 'utf8');
+
+    // idea_void: status=VOID(...) 即使 sha 匹配且 votes 登记也不得计有效票
+    const vdText = '<!-- meta role=brief idea=idea_void -->\n### Idea\nC\n';
+    const vdSha = crypto.createHash('sha256').update(vdText, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(fcBriefs, 'idea_void.md'), vdText, 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_void.codex.md'), mkCardText('idea_void', 'sha=' + vdSha), 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_void.manifest'), '<!-- manifest schema=2 idea=idea_void sha=' + vdSha + ' status=VOID(same-model) -->\nvotes: codex\n', 'utf8');
+
+    // idea_orphan: 缺失 brief，只有 card + manifest（也不得计入 S3 工单数）
+    fs.writeFileSync(path.join(fcCards, 'idea_orphan.codex.md'), mkCardText('idea_orphan', 'sha=111122223333'), 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_orphan.manifest'), '<!-- manifest schema=2 idea=idea_orphan sha=111122223333 status=OK -->\nvotes: codex\n', 'utf8');
+
+    // idea_s2_missing_votes: schema=2 缺失 votes: 行，仅保留 seats: codex → 不得回退上榜
+    const mvText = '<!-- meta role=brief idea=idea_s2_missing_votes -->\n### Idea\nD\n';
+    const mvSha = crypto.createHash('sha256').update(mvText, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(fcBriefs, 'idea_s2_missing_votes.md'), mvText, 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_s2_missing_votes.codex.md'), mkCardText('idea_s2_missing_votes', 'sha=' + mvSha), 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_s2_missing_votes.manifest'), '<!-- manifest schema=2 idea=idea_s2_missing_votes sha=' + mvSha + ' status=OK -->\nseats: codex\n', 'utf8');
+
+    // idea_bad_ok: 未闭合状态 OK(incomplete → 不得上榜
+    const boText = '<!-- meta role=brief idea=idea_bad_ok -->\n### Idea\nE\n';
+    const boSha = crypto.createHash('sha256').update(boText, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(fcBriefs, 'idea_bad_ok.md'), boText, 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_bad_ok.codex.md'), mkCardText('idea_bad_ok', 'sha=' + boSha), 'utf8');
+    fs.writeFileSync(path.join(fcCards, 'idea_bad_ok.manifest'), '<!-- manifest schema=2 idea=idea_bad_ok sha=' + boSha + ' status=OK(incomplete -->\nvotes: codex\n', 'utf8');
+
+    const fcSum = val.summarizeTopic(p1Ws, { topic: 'fc', writeFile: false });
+    const fcMap = new Map(fcSum.items.map((x) => [x.rawId, x]));
+    assert.equal(fcMap.get('idea_valid').rank, 1, 'P1 #1 正对照：合格卡应排 #1');
+    assert.equal(fcMap.get('idea_valid').counts.go, 1, 'P1 #1 正对照：合格卡应计 1 go');
+    for (const k of ['idea_nosha', 'idea_novotes', 'idea_void', 'idea_orphan', 'idea_s2_missing_votes', 'idea_bad_ok']) {
+      assert.equal(fcMap.get(k).rank, null, 'P1 #1/#2：' + k + ' 不得上榜');
+      assert.equal(fcMap.get(k).counts.go, 0, 'P1 #1/#2：' + k + ' 不得计入有效 go 票');
+    }
+
+    // 非法非 YAML 普通 Markdown 及伪造 duplication_risk: clear 不得点亮 S4.5；真实合格 mid 报告应点亮 S4.5；VOID 轮不得让 S4 排名节点变 done
+    fs.mkdirSync(path.join(p1Ws, 'papers', 'novelty', 'fc'), { recursive: true });
+    fs.writeFileSync(path.join(p1Ws, 'papers', 'novelty', 'notes.md'), '# 随手笔记\n非查重 YAML\n', 'utf8');
+    fs.writeFileSync(
+      path.join(p1Ws, 'papers', 'novelty', 'fc', 'idea_nosha.md'),
+      '<!-- meta role=novelty idea=idea_nosha brief=ideas/fc/briefs/idea_nosha.md -->\n```yaml\nduplication_risk: clear\n```\n',
+      'utf8',
+    );
+    const fcSnapBefore = tel.buildSwarmSnapshot(p1Ws, { topic: 'fc', focusIdeaId: 'idea_void' });
+    const s3Stg = fcSnapBefore.stages.find((s) => s.id === 'S3');
+    const s45StgBefore = fcSnapBefore.stages.find((s) => s.id === 'S4.5');
+    const voidSummaryNode = fcSnapBefore.graph.nodes.find((n) => n.id === 's4-summary');
+    assert.equal(s3Stg.badge, '6 张工单', 'P1 #2：无 brief 孤件 idea_orphan 不得计入 S3 工单数');
+    assert.equal(s45StgBefore.status, 'empty', 'P1 #2：不合格 clear YAML 不得点亮 S4.5 查重阶段');
+    assert.notEqual(voidSummaryNode && voidSummaryNode.status, 'done', 'P1 #2：VOID 轮不得令 S4 排名节点显示 done');
+
+    fs.writeFileSync(
+      path.join(p1Ws, 'papers', 'novelty', 'fc', 'idea_valid.md'),
+      [
+        '<!-- meta role=novelty idea=idea_valid brief=ideas/fc/briefs/idea_valid.md brief_sha=' + okSha + ' -->',
+        '```yaml',
+        'idea_id: idea_valid',
+        'searched_sources: ["arXiv", "Semantic Scholar"]',
+        'closest_works:',
+        '  - title: "Related Gating Work"',
+        '    venue_year: "ICLR 2025"',
+        '    url_or_arxiv: "https://arxiv.org/abs/2501.00001"',
+        '    overlap: "同属门控思路但目标函数与条件变量不同"',
+        'duplication_risk: mid',
+        'differentiation: "本方案仅在视觉残差通道引入双阈值门控并保持主干冻结"',
+        'recommendation: "补做与该文的同预算对比实验后可推进"',
+        'confidence: 0.8',
+        '```',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const fcSnapAfter = tel.buildSwarmSnapshot(p1Ws, { topic: 'fc' });
+    const s45StgAfter = fcSnapAfter.stages.find((s) => s.id === 'S4.5');
+    assert.equal(s45StgAfter.status, 'done', 'P1 #2：通过 checkNoveltyReport 的合格 mid 报告必须正常点亮 S4.5');
+
+    // 3) P1 #3：模板行、正文代码块示例、空/损坏 brief_sha、双勾选、已删 brief 均拦截；真实历史归档 verdict 全数可读
+    const tplV = val.parseVerdictText('决定: go | revise | kill\n\n```md\nDecision: go\n```\n');
+    assert.equal(tplV.decision, null, 'P1 #3：未填模板 + 正文代码块示例绝不得误判为 go');
+    const emptyShaV = val.parseVerdictText('决定: go\nbrief_sha:\n', { expectedBriefSha: 'cccc2222dddd' });
+    assert.equal(emptyShaV.decision, null, 'P1 #3：空的 brief_sha: 行必须判 corruptSha 并拒认');
+    assert.equal(emptyShaV.corruptSha, true);
+    const dualCbV = val.parseVerdictText('☑ go  ☑ kill\n');
+    assert.equal(dualCbV.decision, null, 'P1 #3：同时勾选多个决定复选框不得返回任意单值');
+    const badShaV = val.parseVerdictText('决定: go\nbrief_sha: corrupted-sha!\n', { expectedBriefSha: 'cccc2222dddd' });
+    assert.equal(badShaV.decision, null, 'P1 #3：格式损坏的 brief_sha 不得跳过漂移检查');
+    assert.equal(badShaV.corruptSha, true);
+    const missBriefV = val.parseVerdictText('决定: go\nbrief_sha: cccc2222dddd\n', { expectedBriefSha: '', briefMissing: true });
+    assert.equal(missBriefV.decision, null, 'P1 #3：brief 已删除时旧裁决不得再算已裁决');
+    const staleV = val.parseVerdictText('决定: go\nbrief_sha: aaaa1111bbbb\n', { expectedBriefSha: 'cccc2222dddd' });
+    assert.equal(staleV.decision, null, 'P1 #3：brief_sha 漂移的旧裁决不得再作为有效裁决');
+    assert.equal(staleV.stale, true, 'P1 #3：brief_sha 漂移应标记 stale=true');
+
+    // 验证真实仓内历史归档裁决（含 ## 决定 章节 + 无语言围栏）18/18 全部可读，杜绝回归
+    const realArchiveDir = path.resolve(SRC, '..', '..', 'ideas', 'archive', 'papo-3b');
+    if (fs.existsSync(realArchiveDir)) {
+      const archVerdicts = fs.readdirSync(realArchiveDir).filter((f) => /^verdict-idea_.*\.md$/i.test(f));
+      assert.ok(archVerdicts.length >= 18, '应存在 18 份仓内历史归档裁决样本');
+      const expectedRevise = new Set(['verdict-idea_10.md', 'verdict-idea_20.md']);
+      for (const vf of archVerdicts) {
+        const parsedArch = val.parseVerdictText(fs.readFileSync(path.join(realArchiveDir, vf), 'utf8'));
+        const wantDec = expectedRevise.has(vf) ? 'revise' : 'kill';
+        assert.equal(parsedArch.decision, wantDec, 'P1 #3：历史归档裁决 ' + vf + ' 应解析为最终裁决 ' + wantDec + '（含 verdict-idea_15 终裁 kill）');
+      }
+    }
+    // P1 #3 细化回归：带语言标注围栏、裸围栏内空 brief_sha、显式行与复选框冲突均必须拒判为 null
+    assert.equal(
+      val.parseVerdictText('## 决定\n```text\n决定: go\n```\n').decision,
+      null,
+      'P1 #3：带语言标注的 ```text 代码块不得解析为有效决定',
+    );
+    assert.equal(
+      val.parseVerdictText('## 决定\n```\n决定: go\nbrief_sha:\n```\n', { expectedBriefSha: 'abcdef123456' }).decision,
+      null,
+      'P1 #3：裸围栏内出现空 brief_sha: 时不得忽略占位指纹',
+    );
+    assert.equal(
+      val.parseVerdictText('Decision: go\n- ☑ go\n- ☑ kill\n').decision,
+      null,
+      'P1 #3：显式决定行与多选复选框冲突时必须拒判为 null',
+    );
+    assert.equal(
+      val.parseVerdictText('Decision: go\n- [x] kill\n').decision,
+      null,
+      'P1 #3：显式 Decision: go 与 Markdown 复选框 - [x] kill 冲突时必须拒判为 null',
+    );
+    assert.equal(
+      val.parseVerdictText('☐ go ☑ kill\n').decision,
+      'kill',
+      'P1 #3：单行 ☐ go ☑ kill 必须解析为 kill 而非误把 ☑ 当作 go 的后缀',
+    );
+
+    // 4) P1 #4：file-lock 宽限期防误抢占、nonce 严格匹配释放、死进程接管
+    const lockDir = mkTmp('p1-file-lock');
+    const lkPath = path.join(lockDir, 'sample.lock');
+    fs.writeFileSync(lkPath, '', 'utf8'); // 刚创建的空锁（模拟写入中）
+    const freshCheck = fl.inspectLockStale(lkPath, { corruptGraceMs: 5000 });
+    assert.equal(freshCheck, '', 'P1 #4：宽限期内的空锁绝不得被判为损坏抢占');
+    const oldTs = new Date(Date.now() - 10000);
+    fs.utimesSync(lkPath, oldTs, oldTs);
+    assert.ok(fl.inspectLockStale(lkPath, { corruptGraceMs: 1000 }).includes('空锁'), 'P1 #4：超过宽限期的空锁应识别为陈旧锁');
+    fs.unlinkSync(lkPath);
+
+    const acq = fl.acquireExclusiveLock(lkPath, { purpose: 'test', timeoutMs: 200 });
+    assert.equal(acq.ok, true);
+    assert.equal(fl.releaseExclusiveLock(lkPath, ''), false, 'P1 #4：空 nonce 绝不得释放他人/自身锁');
+    assert.equal(fl.releaseExclusiveLock(lkPath, 'wrong-nonce'), false, 'P1 #4：错误 nonce 绝不得释放锁');
+    assert.equal(fs.existsSync(lkPath), true);
+    assert.equal(fl.releaseExclusiveLock(lkPath, acq.nonce), true, 'P1 #4：匹配 nonce 才可释放锁');
+    assert.equal(fs.existsSync(lkPath), false);
+
+    // 死进程锁接管
+    fs.writeFileSync(lkPath, JSON.stringify({ pid: 999999, nonce: 'dead1', ts: Date.now() - 10000, purpose: 'dead' }) + '\n', 'utf8');
+    const takeOver = fl.acquireExclusiveLock(lkPath, { purpose: 'takeover', timeoutMs: 500 });
+    assert.equal(takeOver.ok, true, 'P1 #4：死 PID 锁应被串行安全接管');
+    assert.equal(fl.releaseExclusiveLock(lkPath, takeOver.nonce), true);
+
+    // P1 #4：残留空 .reap 文件与死 PID .dead 二级抢占文件均能自动回收，不永久 BUSY
+    const deadPayload = JSON.stringify({ pid: 999998, at: Date.now() - 10000, nonce: 'dead2' }) + '\n';
+    fs.writeFileSync(lkPath, deadPayload, 'utf8');
+    const deadRec = fl.readLockRecord(lkPath);
+    const deadFp = crypto.createHash('sha256').update([
+      deadRec.ino || 0, Math.round(deadRec.mtimeMs || 0), deadRec.size || 0,
+      deadRec.pid || 0, deadRec.at || 0, deadRec.nonce || '',
+      deadRec.empty ? '1' : '0', deadRec.corrupt ? '1' : '0',
+    ].join('|'), 'utf8').digest('hex').slice(0, 16);
+    const reapPath = lkPath + '.reap.' + deadFp;
+    fs.writeFileSync(reapPath, '', 'utf8');
+    const backDate = new Date(Date.now() - 10000);
+    fs.utimesSync(reapPath, backDate, backDate);
+    const reapRec = fl.readLockRecord(reapPath);
+    const reapFp = crypto.createHash('sha256').update([
+      reapRec.ino || 0, Math.round(reapRec.mtimeMs || 0), reapRec.size || 0,
+      reapRec.pid || 0, reapRec.at || 0, reapRec.nonce || '',
+      reapRec.empty ? '1' : '0', reapRec.corrupt ? '1' : '0',
+    ].join('|'), 'utf8').digest('hex').slice(0, 16);
+    const metaDeadPath = reapPath + '.dead.' + reapFp;
+    fs.writeFileSync(metaDeadPath, JSON.stringify({ pid: 999997, at: Date.now() - 10000, nonce: 'deadmeta' }) + '\n', 'utf8');
+    // 第一次尝试会清理死 .dead 与空 .reap，第二次即可成功接管原死锁
+    const firstTry = fl.acquireExclusiveLock(lkPath, { corruptGraceMs: 1000 });
+    const secondTry = firstTry.ok ? firstTry : fl.acquireExclusiveLock(lkPath, { corruptGraceMs: 1000 });
+    assert.equal(secondTry.ok, true, 'P1 #4：超宽限空 .reap 与死 PID .dead 文件应可自愈回收并接管原死锁');
+    assert.equal(fl.releaseExclusiveLock(lkPath, secondTry.nonce), true);
+
+    // 5) P1 #5：summarizeTopic 与 dispatchFlow status 均拒绝路径穿越 topic
+    const badTopicSum = val.summarizeTopic(p1Ws, { topic: '../escape', writeFile: false });
+    assert.equal(badTopicSum.ok, false, 'P1 #5：summarizeTopic 必须拦截含 .. 的 topic 路径穿越');
+    const badTopicStatus = await ft.dispatchFlow({ action: 'status', topic: '../escape' }, { repoRoot: p1Ws, useDshPatch: false });
+    assert.equal(badTopicStatus.ok, false, 'P1 #5：desktop status 必须拦截含 .. 的 topic 路径穿越');
+    assert.equal(badTopicStatus.reason, 'bad-args');
+
+    // 6) P1 #10：从未冻结过的契约使用 --re-record 必须失败
+    const cNever = path.join(p1Ws, 'contract', 'exp_never.v1.md');
+    fs.writeFileSync(cNever, [
+      '## §0 元信息\n- exp_id: exp_never\n- baseline: none\n- 数据集与 split: MME (200)',
+      '## §1 Hypothesis\nAcc >= 80.0% (+2.0pp)。',
+      '## §2 实现锚点\n- 超参: lr=1e-6\n- metric: Acc\n- 计算预算: 1xA800 1h\n- 代码对应: train.py',
+      '## §3 成功信号\n- S1: Acc >= 80.0%',
+      '## §4 失败信号\n- F1: 长度膨胀 >= 20%',
+      '## §5 Ablation 消融预期\n| Ablation | 预期 | 相反说明 |\n|---|---|---|\n| 去掉组件 | Acc 回落 | 无效 |',
+      '## §6 防事后合理化条款\n锁定。',
+      '',
+    ].join('\n'), 'utf8');
+    const rrUnfrozen = wf.checkContractFile(cNever, { rootDir: p1Ws, reRecord: true, reason: '尝试跳过首冻' });
+    assert.equal(rrUnfrozen.ok, false, 'P1 #10：未首次冻结的契约绝不允许 --re-record');
+
+    // 7) P1 #12：默认 initProject() 生成 ideas/default/ 时，桌面快照与写裁决全链路对齐
+    const defWs = mkTmp('p1-default-topic');
+    wf.initProject(defWs, { force: false }); // 默认创建 ideas/default/briefs/
+    const defBrief = '<!-- meta role=brief idea=idea_01 anchor=none -->\n### Idea\n默认课题测试\n';
+    const defSha = crypto.createHash('sha256').update(defBrief, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(defWs, 'ideas', 'default', 'briefs', 'idea_01.md'), defBrief, 'utf8');
+    const defSnap = tel.buildSwarmSnapshot(defWs, { topic: 'default' });
+    assert.ok(defSnap.ideas.some((it) => it.ideaId === 'idea_01'), 'P1 #12：discoverTopics 应正确读取 ideas/default/briefs/idea_01.md');
+    const defVerd = tel.writeHumanVerdict(defWs, {
+      topic: 'default',
+      ideaId: 'idea_01',
+      decision: 'go',
+      expectedBriefSha: defSha,
+      requireBriefSha: true,
+    });
+    assert.equal(defVerd.ok, true, 'P1 #12：ideas/default 下的工单可正常落盘裁决');
+    assert.equal(defVerd.verdictRel, 'ideas/default/verdict-idea_01.md');
+
+    // P1 #6：ideas/default/ 存在时，仅存在于平铺 ideas/briefs/ 的工单绝不被 default 课题静默跨目录写入
+    fs.mkdirSync(path.join(defWs, 'ideas', 'briefs'), { recursive: true });
+    const flatOnlyBrief = '<!-- meta role=brief idea=idea_flat_only anchor=none -->\n### Idea\n平铺独有工单\n';
+    const flatOnlySha = crypto.createHash('sha256').update(flatOnlyBrief, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(defWs, 'ideas', 'briefs', 'idea_flat_only.md'), flatOnlyBrief, 'utf8');
+    const crossVerd = tel.writeHumanVerdict(defWs, {
+      topic: 'default',
+      ideaId: 'idea_flat_only',
+      decision: 'go',
+      expectedBriefSha: flatOnlySha,
+      requireBriefSha: true,
+    });
+    assert.equal(crossVerd.ok, false, 'P1 #6：default 课题绝不得跨目录改道写平铺工单裁决');
+    assert.equal(crossVerd.code, 'BRIEF_NOT_FOUND');
+
+    // P2 #1：超 140 KiB 长 brief 在快照与写裁决间 SHA 完全一致，不误报 BRIEF_CHANGED
+    const longBrief = '<!-- meta role=brief idea=idea_long anchor=none -->\n### Idea\n超长工单\n' + 'A'.repeat(150 * 1024) + '\n';
+    fs.writeFileSync(path.join(defWs, 'ideas', 'default', 'briefs', 'idea_long.md'), longBrief, 'utf8');
+    const longSnap = tel.buildSwarmSnapshot(defWs, { topic: 'default' });
+    const longItem = longSnap.ideas.find((it) => it.ideaId === 'idea_long');
+    const longVerd = tel.writeHumanVerdict(defWs, {
+      topic: 'default',
+      ideaId: 'idea_long',
+      decision: 'go',
+      expectedBriefSha: longItem && longItem.sha,
+      requireBriefSha: true,
+    });
+    assert.equal(longVerd.ok, true, 'P2 #1：超过 128 KiB 的长 brief 快照指纹与写裁决全文指纹必须完全一致');
+
+    // 8) P2 #13 & P2 #3：极小非零效应量不误判 ZERO_EFFECT；双臂题簇键不一致或显式空串均报错
+    const tinyA = Array.from({ length: 8 }, (_, i) => ({ item_id: 'q' + i, rollout_id: 0, score: 0.5 }));
+    const tinyB = Array.from({ length: 8 }, (_, i) => ({ item_id: 'q' + i, rollout_id: 0, score: 0.5 + (i % 2 === 0 ? 2e-8 : 3e-8) }));
+    const tinyStats = ps.computePairedStats(tinyA, tinyB);
+    assert.equal(tinyStats.item_level_mde_status, 'EXCEEDS_MDE', 'P2 #13：未舍入极小正向题簇差值应判 EXCEEDS_MDE 而非 ZERO_EFFECT');
+    assert.equal('_raw_delta' in tinyStats.item_level, false, 'P2 #13：item_level 不得泄漏 _raw_delta');
+
+    assert.throws(() => {
+      ps.computePairedStats(
+        [{ id: 'row1', item_id: 'qA', correct: 0 }, { id: 'row2', item_id: 'qB', correct: 1 }],
+        [{ id: 'row1', item_id: 'qX', correct: 1 }, { id: 'row2', item_id: 'qB', correct: 1 }],
+      );
+    }, /题簇键不一致/, 'N8：双臂同样本 ID 对应不同题簇键时应显式报错');
+
+    assert.throws(() => {
+      ps.computePairedStats(
+        [{ id: 'row1', item_id: '', correct: 0 }, { id: 'row2', item_id: '', correct: 1 }],
+        [{ id: 'row1', item_id: '', correct: 1 }, { id: 'row2', item_id: '', correct: 1 }],
+      );
+    }, /不能为空值/, 'P2 #3：显式空串 item_id 不得将多题错误合并为 n_items=1');
+
+    assert.throws(() => {
+      ps.computePairedStats(
+        [{ id: '::0', correct: 0 }, { id: '::1', correct: 1 }],
+        [{ id: '::0', correct: 1 }, { id: '::1', correct: 1 }],
+      );
+    }, /前缀为空/, 'P2 #3：复合主键前缀为空（如 ::0）必须报错而非合并入空题簇');
+
+    // 9) P2 #5 & P2 #14：updateLineup 与运行期 resolveExecutionPlan/resolveStagePlan 均拒绝非法 @effort，同时保留 @20241022
+    assert.throws(() => {
+      regMod.updateLineup(defWs, { scoutEffort: 'ultra-mega' });
+    }, /思考强度值非法/, 'P2 #14：updateLineup 传入非法思考强度必须抛出 BAD_CONFIG 而非静默清空');
+    assert.throws(() => {
+      regMod.updateLineup(defWs, { scout: 'codex:gpt-5@hgh' });
+    }, /非法的 @思考强度/, 'P2 #5：内联拼错 @hgh 必须报错而不得吞进模型名');
+    const dateModelRes = regMod.updateLineup(defWs, { scout: 'claude:claude-3-5-sonnet@20241022' });
+    assert.equal(dateModelRes.lineup.scout.model, 'claude-3-5-sonnet@20241022', 'P2 #5：合法云模型日期后缀 @20241022 必须保留');
+    const defCfg = regMod.loadConfig(defWs);
+    const badRevPlan = regMod.resolveExecutionPlan(defCfg, { reviewSpec: 'codex:gpt-5@hgh', useDshPatch: false });
+    assert.equal(badRevPlan.ok, false, 'P2 #5：resolveExecutionPlan 必须拒绝拼错的内联 @hgh');
+    assert.equal(badRevPlan.code, 'INVALID_EFFORT');
+    const badStgPlan = regMod.resolveStagePlan(defCfg, 'scout', { agent: 'codex:gpt-5@hgh', useDshPatch: false });
+    assert.equal(badStgPlan.ok, false, 'P2 #5：resolveStagePlan 必须拒绝拼错的内联 @hgh');
+    assert.equal(badStgPlan.code, 'INVALID_EFFORT');
+
+    // 10) 终审清零补强回归（P1 #1 / P1 #2 / P1 #6 / New P1-B / P2-3 / P3）
+    // P1 #1：首行空行后的 schema=2 manifest 缺失 votes: 仍必须拒绝计票与排名
+    const p1LeadWs = mkTmp('p1-lead-blank-manifest');
+    wf.initProject(p1LeadWs, { topic: 'leadcheck', force: false });
+    const leadBrief = '<!-- meta role=brief idea=idea_01 anchor=none -->\n### Idea\n首行空行清单回归\n';
+    const leadSha = crypto.createHash('sha256').update(leadBrief, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(p1LeadWs, 'ideas', 'leadcheck', 'briefs', 'idea_01.md'), leadBrief, 'utf8');
+    fs.mkdirSync(path.join(p1LeadWs, 'ideas', 'leadcheck', 'cards'), { recursive: true });
+    fs.writeFileSync(path.join(p1LeadWs, 'ideas', 'leadcheck', 'cards', 'idea_01.codex.md'), [
+      '<!-- meta backend=codex model=gpt-5 sha=' + leadSha + ' -->',
+      '```yaml',
+      'idea_id: idea_01',
+      'novelty: {score: 5, reason: "ok"}',
+      'feasibility: {score: 5, reason: "ok"}',
+      'baseline_fit: {score: 5, reason: "ok"}',
+      'impl_cost: {score: 5, reason: "ok"}',
+      'expected_gain: {score: 5, reason: "ok"}',
+      'verdict: go',
+      'kill_reason: null',
+      'confidence: 0.9',
+      'missing_info: []',
+      '```',
+      '',
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(
+      path.join(p1LeadWs, 'ideas', 'leadcheck', 'cards', 'idea_01.manifest'),
+      '\n<!-- manifest schema=2 idea=idea_01 sha=' + leadSha + ' status=OK -->\nseats: codex\n',
+      'utf8',
+    );
+    const leadSum = val.summarizeTopic(p1LeadWs, { topic: 'leadcheck', writeFile: false });
+    assert.equal(leadSum.items[0].rank, null, 'P1 #1：带前导空行的 schema=2 manifest 缺 votes: 不得上榜');
+    assert.equal(leadSum.items[0].counts.go, 0, 'P1 #1：带前导空行的 schema=2 manifest 缺 votes: 不得计票');
+
+    // P1 #2：含多个 YAML 代码块的查重报告必须被 checkNoveltyReport 拒收（杜绝高/低风险口径分裂）
+    const multiYamlNov = path.join(p1LeadWs, 'papers', 'novelty', 'idea_01.md');
+    fs.mkdirSync(path.dirname(multiYamlNov), { recursive: true });
+    fs.writeFileSync(multiYamlNov, [
+      '<!-- meta role=novelty idea=idea_01 brief=ideas/leadcheck/briefs/idea_01.md sha=' + leadSha + ' -->',
+      '```yaml',
+      'idea_id: "idea_01"',
+      'duplication_risk: low',
+      'closest_works: []',
+      'polish: "none"',
+      'note: "arXiv 检索未发现撞车工作"',
+      'confidence: 0.8',
+      '```',
+      '```yaml',
+      'duplication_risk: high',
+      '```',
+      '',
+    ].join('\n'), 'utf8');
+    assert.equal(wf.checkNoveltyReport(multiYamlNov).ok, false, 'P1 #2：多 YAML 块查重报告必须被 checkNoveltyReport 拦截');
+
+    // P1 #6：runNovelty 拒绝 --topic 与工单路径所属课题冲突，且 --out 指向无 brief= 的已存在文件时拒绝覆盖
+    const conflictNovRc = await runMod.runNovelty({
+      root: p1LeadWs,
+      brief: 'ideas/leadcheck/briefs/idea_01.md',
+      topic: 'other_topic',
+      dry: true,
+      noExitCode: true,
+      captureOnly: true,
+    });
+    assert.equal(conflictNovRc, 1, 'P1 #6：--topic 与工单路径所属课题冲突必须失败退 1');
+    const unrelatedOut = path.join(p1LeadWs, 'papers', 'novelty', 'unrelated.md');
+    fs.writeFileSync(unrelatedOut, '# 外部已有笔记（无 brief= 归属头）\n', 'utf8');
+    const overwriteNovRc = await runMod.runNovelty({
+      root: p1LeadWs,
+      brief: 'ideas/leadcheck/briefs/idea_01.md',
+      outFile: 'papers/novelty/unrelated.md',
+      dry: true,
+      noExitCode: true,
+      captureOnly: true,
+    });
+    assert.equal(overwriteNovRc, 2, 'P1 #6：--out 指向缺少 brief= 归属头的已存在文件时必须拒绝覆盖（rc=2）');
+    assert.ok(fs.readFileSync(unrelatedOut, 'utf8').includes('外部已有笔记'), 'P1 #6：被拒覆盖的无关文件原文必须完好');
+
+    // New P1-B：CHANGELOG.md 非普通文件（如目录占位）时 checkContractFile 必须拦截退 2
+    const badClWs = mkTmp('p1b-bad-changelog');
+    wf.initProject(badClWs, { force: false });
+    const badClPath = path.join(badClWs, 'contract', 'CHANGELOG.md');
+    if (fs.existsSync(badClPath)) fs.unlinkSync(badClPath);
+    fs.mkdirSync(badClPath);
+    const badClContract = path.join(badClWs, 'contract', 'exp_cl.v1.md');
+    fs.writeFileSync(badClContract, [
+      '## §0 元信息\n- exp_id: exp_cl\n- baseline: none\n- 数据集与 split: MME (200)',
+      '## §1 Hypothesis\nAcc >= 80.0% (+2.0pp)。',
+      '## §2 实现锚点\n- 超参: lr=1e-6\n- metric: Acc\n- 计算预算: 1xA800 1h\n- 代码对应: train.py',
+      '## §3 成功信号\n- S1: Acc >= 80.0%',
+      '## §4 失败信号\n- F1: 长度膨胀 >= 20%',
+      '## §5 Ablation 消融预期\n| Ablation | 预期 | 相反说明 |\n|---|---|---|\n| 去掉组件 | Acc 回落 | 无效 |',
+      '## §6 防事后合理化条款\n锁定。',
+      '',
+    ].join('\n'), 'utf8');
+    const badClRes = wf.checkContractFile(badClContract, { rootDir: badClWs, record: true });
+    assert.equal(badClRes.ok, false, 'New P1-B：CHANGELOG.md 为非普通文件时 checkContractFile 必须拒写');
+    assert.equal(badClRes.rc, 2);
+
+    // P2-3：课题 A 运行中任务不污染课题 B 快照/拓扑，且未上榜时不将 worker->summary 边标为 done
+    const isoWs = mkTmp('p2-topic-active-run');
+    wf.initProject(isoWs, { topic: 'topic_a', force: false });
+    wf.initProject(isoWs, { topic: 'topic_b', force: false });
+    fs.writeFileSync(path.join(isoWs, 'ideas', 'topic_a', 'briefs', 'idea_01.md'), '<!-- meta role=brief idea=idea_01 anchor=none -->\n### Idea\n课题A\n', 'utf8');
+    fs.writeFileSync(path.join(isoWs, 'ideas', 'topic_b', 'briefs', 'idea_01.md'), '<!-- meta role=brief idea=idea_01 anchor=none -->\n### Idea\n课题B\n', 'utf8');
+    const runAId = tel.startRunTelemetry(isoWs, {
+      stage: 'S4',
+      topic: 'topic_a',
+      targetId: 'idea_01',
+      workers: [{ tag: 'codex', seat: 'codex', status: 'working', startedAt: Date.now() }],
+    });
+    assert.ok(runAId);
+    const snapB = tel.buildSwarmSnapshot(isoWs, { topic: 'topic_b' });
+    assert.equal(snapB.activeRun, null, 'P2-3：课题 A 的运行中任务不得泄漏为课题 B 的 activeRun');
+    const stageS4B = snapB.stages.find((s) => s.id === 'S4');
+    assert.notEqual(stageS4B && stageS4B.status, 'working', 'P2-3：课题 A 运行中不得把课题 B 的 S4 阶段标为 working');
+    tel.finishRunTelemetry(isoWs, runAId, { status: 'done', rc: 0 });
+
+    // P3：bootstrapIters=0 且 n_items>=2 时报告区分“已关闭自助法”，不再误报“独立题簇不足 2 题”
+    const noBootStats = ps.computePairedStats(tinyA, tinyB, { bootstrapIters: 0 });
+    const noBootReport = ps.formatPairedStatsReport(noBootStats);
+    assert.ok(noBootReport.includes('已关闭自助法'), 'P3：bootstrapIters=0 时应报告“已关闭自助法”');
+    assert.ok(!noBootReport.includes('独立题簇不足 2 题'), 'P3：n_items>=2 且 bootstrapIters=0 时不得误报题簇不足 2 题');
+
+    // 11) Codex 终审二轮 15 项全清零回归（~~~ 多块 / 备注防劫持 / 评审票防覆盖 / 大小写课题 / 专属目录防串单 / default vs _flat / 冲突 votes / 对象 effort）
+    // P1 #2 & P3：~~~ 围栏追加第二个高风险块必须因“检测到 2 个代码块”被拒收（文件名与 idea_id 完全一致，排除文件名不匹配干扰）
+    const tildeDir = path.join(p1LeadWs, 'papers', 'novelty', 'tilde_case');
+    fs.mkdirSync(tildeDir, { recursive: true });
+    const tildeNov = path.join(tildeDir, 'idea_01.md');
+    fs.writeFileSync(tildeNov, [
+      '<!-- meta role=novelty idea=idea_01 brief=ideas/leadcheck/briefs/idea_01.md sha=' + leadSha + ' -->',
+      '```yaml',
+      'idea_id: "idea_01"',
+      'duplication_risk: low',
+      'closest_works: []',
+      'polish: "none"',
+      'note: "arXiv 检索未发现撞车工作"',
+      'confidence: 0.8',
+      '```',
+      '~~~yaml',
+      'duplication_risk: high',
+      '~~~',
+      '',
+    ].join('\n'), 'utf8');
+    const tildeRes = wf.checkNoveltyReport(tildeNov);
+    assert.equal(tildeRes.ok, false, 'P1 #2：追加 ~~~ 围栏高风险块必须被 checkNoveltyReport 拦截');
+    assert.ok(
+      Array.isArray(tildeRes.problems) && tildeRes.problems.some((p) => p.includes('检测到 2 个代码块')),
+      'P3：tilde 多块测试必须精准命中“检测到 2 个代码块”错误：' + JSON.stringify(tildeRes.problems),
+    );
+
+    // 新 P1 #1：writeHumanVerdict 备注含 `## 终裁` + `决定: go` + `brief_sha:` 绝不得改写人类正式裁决 kill
+    const injVerdRes = tel.writeHumanVerdict(defWs, {
+      topic: 'default',
+      ideaId: 'idea_01',
+      decision: 'kill',
+      note: '引用历史讨论：\n## 终裁\n决定: go\nbrief_sha: 000000000000\n',
+      expectedBriefSha: defSha,
+      requireBriefSha: true,
+    });
+    assert.equal(injVerdRes.ok, true);
+    const injVerdParsed = val.parseVerdictText(fs.readFileSync(path.join(defWs, injVerdRes.verdictRel), 'utf8'), { expectedBriefSha: defSha });
+    assert.equal(injVerdParsed.decision, 'kill', '新 P1 #1：备注含 ## 终裁 与 决定: go 时重新解析必须仍为 kill');
+    assert.equal(injVerdParsed.stale, false, '新 P1 #1：备注内 brief_sha 文本不得污染正式指纹');
+
+    // P1 #6 & 新 P1 #2：Windows 大写 IDEAS/ 路径仍拦错误 --topic；非 dry 模式 --out 指向同工单评审票必须拒写并释放锁
+    if (process.platform === 'win32') {
+      const upperConflictRc = await runMod.runNovelty({
+        root: p1LeadWs,
+        brief: 'IDEAS/leadcheck/briefs/idea_01.md',
+        topic: 'other_topic',
+        dry: true,
+        noExitCode: true,
+        captureOnly: true,
+      });
+      assert.equal(upperConflictRc, 1, 'P1 #6：Windows 下 IDEAS/... 大小写变体不得绕过错误 --topic 拒绝');
+    }
+    const reviewCardPath = path.join(p1LeadWs, 'ideas', 'leadcheck', 'cards', 'idea_01.codex.md');
+    fs.writeFileSync(
+      reviewCardPath,
+      '<!-- meta backend=codex brief=ideas/leadcheck/briefs/idea_01.md sha=' + leadSha + ' model=gpt-5 -->\nreview-card-sentinel\n',
+      'utf8',
+    );
+    const reviewOverwriteRc = await runMod.runNovelty({
+      root: p1LeadWs,
+      brief: 'ideas/leadcheck/briefs/idea_01.md',
+      outFile: 'ideas/leadcheck/cards/idea_01.codex.md',
+      dry: false,
+      noExitCode: true,
+      captureOnly: true,
+    });
+    assert.equal(reviewOverwriteRc, 2, '新 P1 #2：novelty --out 指向同工单评审票（缺 role=novelty）必须拒写退 2');
+    assert.ok(fs.readFileSync(reviewCardPath, 'utf8').includes('review-card-sentinel'), '新 P1 #2：同工单评审票原文必须完好');
+    assert.equal(
+      fs.existsSync(path.join(p1LeadWs, 'ideas', 'leadcheck', 'cards', '.idea_01.codex.md.lock')),
+      false,
+      'P1 #6：显式 --out 拒写后必须清理目标锁不残留',
+    );
+
+    // 新 P1 #3：课题专属目录内若放入 brief= 指向另一课题的同内容同 SHA 查重报告，绝不得串单生效
+    const sameBriefBody = '<!-- meta role=brief idea=idea_01 anchor=none -->\n### Idea\n同内容跨课题测试\n';
+    const sameBriefSha = crypto.createHash('sha256').update(sameBriefBody, 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(isoWs, 'ideas', 'topic_a', 'briefs', 'idea_01.md'), sameBriefBody, 'utf8');
+    fs.writeFileSync(path.join(isoWs, 'ideas', 'topic_b', 'briefs', 'idea_01.md'), sameBriefBody, 'utf8');
+    const crossNovDir = path.join(isoWs, 'papers', 'novelty', 'topic_b');
+    fs.mkdirSync(crossNovDir, { recursive: true });
+    fs.writeFileSync(path.join(crossNovDir, 'idea_01.md'), [
+      '<!-- meta role=novelty idea=idea_01 brief=ideas/topic_a/briefs/idea_01.md sha=' + sameBriefSha + ' -->',
+      '```yaml',
+      'idea_id: "idea_01"',
+      'duplication_risk: low',
+      'closest_works: []',
+      'polish: "none"',
+      'note: "arXiv 检索未发现撞车工作"',
+      'confidence: 0.85',
+      '```',
+      '',
+    ].join('\n'), 'utf8');
+    const snapCrossB = tel.buildSwarmSnapshot(isoWs, { topic: 'topic_b' });
+    const crossBItem = snapCrossB.ideas.find((x) => x.ideaId === 'idea_01');
+    assert.equal(crossBItem && crossBItem.hasNovelty, false, '新 P1 #3：topic_b 目录内 brief=ideas/topic_a/... 的报告绝不得误认作 topic_b 已查重');
+
+    // P2-3：同时存在 ideas/default/ 与平铺 ideas/briefs/ 时，default 运行态不得泄漏到 _flat 快照
+    const runDefId = tel.startRunTelemetry(defWs, {
+      stage: 'S4',
+      topic: 'default',
+      targetId: 'idea_01',
+      workers: [{ tag: 'codex', seat: 'codex', status: 'working', startedAt: Date.now() }],
+    });
+    assert.ok(runDefId);
+    const snapFlat = tel.buildSwarmSnapshot(defWs, { topic: '_flat' });
+    assert.equal(snapFlat.activeRun, null, 'P2-3：命名 default 课题运行态绝不得泄漏到 _flat 快照');
+    assert.equal(snapFlat.activeWorkerCount, 0, 'P2-3：_flat 快照 activeWorkerCount 必须为 0');
+    const flatS4 = snapFlat.stages.find((s) => s.id === 'S4');
+    assert.notEqual(flatS4 && flatS4.status, 'working', 'P2-3：_flat 快照 S4 阶段不得显示 working');
+    tel.finishRunTelemetry(defWs, runDefId, { status: 'done', rc: 0 });
+
+    // 新 P2 #1：schema=2 manifest 含冲突 votes: codex 与 votes: none 必须整单拒票
+    fs.writeFileSync(
+      path.join(p1LeadWs, 'ideas', 'leadcheck', 'cards', 'idea_01.manifest'),
+      '<!-- manifest schema=2 idea=idea_01 sha=' + leadSha + ' status=OK -->\nvotes: codex\nvotes: none\n',
+      'utf8',
+    );
+    const conflictVotesSum = val.summarizeTopic(p1LeadWs, { topic: 'leadcheck', writeFile: false });
+    assert.equal(conflictVotesSum.items[0].rank, null, '新 P2 #1：冲突 votes: 行不得上榜');
+    assert.equal(conflictVotesSum.items[0].counts.go, 0, '新 P2 #1：冲突 votes: 行不得计票');
+
+    // 新 P2 #4：对象形式 lineup.review 中错误 effort 必须返回 INVALID_EFFORT 而非静默降级
+    const badObjCfg = regMod.loadConfig(defWs);
+    badObjCfg.lineup = { review: [{ seat: 'codex', effort: 'hgh' }] };
+    const badObjPlan = regMod.resolveExecutionPlan(badObjCfg, { useDshPatch: false });
+    assert.equal(badObjPlan.ok, false, '新 P2 #4：对象形式 lineup.review 非法 effort 必须报错');
+    assert.equal(badObjPlan.code, 'INVALID_EFFORT');
+
+    // 12) 终审三轮 14 项全清零回归（_flat 保留 / 默认子目录防覆写 / 单 ```yaml 围栏 / 反向复选框 / 冲突 votes status / 三层死守卫自愈 / none|off 与面板写穿校验 / 共享根歧义拦截）
+    // P1 #1：禁止将 _flat / archive / briefs / cards 作为命名课题创建，且历史 ideas/_flat 目录不与平铺 _flat 撞名
+    assert.throws(() => wf.initProject(mkTmp('res-flat'), { topic: '_flat' }), /保留目录|非法/, 'P1 #1：initProject 必须拒绝 --topic _flat');
+    assert.throws(() => wf.initProject(mkTmp('res-arch'), { topic: 'archive' }), /保留目录|非法/, 'P1 #1：initProject 必须拒绝 --topic archive');
+    const badBriefsTopic = wf.makeBriefs(defWs, 'ideas/raw.md', { topic: '_flat' });
+    assert.equal(badBriefsTopic.ok, false, 'P1 #1：makeBriefs 必须拒绝 --topic _flat');
+    const badDivTopicRc = await runMod.runDiverge({ root: defWs, direction: 'test', topic: '_flat', dry: true, noExitCode: true, captureOnly: true });
+    assert.equal(badDivTopicRc, 1, 'P1 #1：runDiverge 必须拒绝 --topic _flat');
+    fs.mkdirSync(path.join(defWs, 'ideas', '_flat', 'briefs'), { recursive: true });
+    const snapNoDupFlat = tel.buildSwarmSnapshot(defWs, { topic: '_flat' });
+    const flatTopicsCount = snapNoDupFlat.topics.filter((t) => t.id === '_flat').length;
+    assert.equal(flatTopicsCount, 1, 'P1 #1：即使磁盘残留 ideas/_flat/，discoverTopics 中 _flat 也必须全局唯一且指向平铺根目录');
+
+    // P1 #2：默认路由下 papers/novelty/<topic>/idea_01.md 若已被评审票/无关文件占用，必须拒写退 2 且不残留锁
+    const defSubNovDir = path.join(p1LeadWs, 'papers', 'novelty', 'leadcheck');
+    fs.mkdirSync(defSubNovDir, { recursive: true });
+    const defSubNovPath = path.join(defSubNovDir, 'idea_01.md');
+    fs.writeFileSync(
+      defSubNovPath,
+      '<!-- meta backend=codex brief=ideas/leadcheck/briefs/idea_01.md sha=' + leadSha + ' model=gpt-5 -->\nsubdir-review-sentinel\n',
+      'utf8',
+    );
+    const defSubOverwriteRc = await runMod.runNovelty({
+      root: p1LeadWs,
+      brief: 'ideas/leadcheck/briefs/idea_01.md',
+      dry: false,
+      noExitCode: true,
+      captureOnly: true,
+    });
+    assert.equal(defSubOverwriteRc, 2, 'P1 #2：默认子目录已存在非查重报告文件时 runNovelty 必须拒写退 2');
+    assert.ok(fs.readFileSync(defSubNovPath, 'utf8').includes('subdir-review-sentinel'), 'P1 #2：被保护的子目录文件原文必须完好');
+    assert.equal(
+      fs.existsSync(path.join(defSubNovDir, '.idea_01.md.lock')),
+      false,
+      'P1 #2：默认子目录拒写后必须释放锁文件',
+    );
+
+    // P1 #5：checkNoveltyReport 必须拒绝无围栏纯 YAML 与单 ~~~ 围栏
+    const rawNovDir = path.join(p1LeadWs, 'papers', 'novelty', 'raw_case');
+    fs.mkdirSync(rawNovDir, { recursive: true });
+    const rawNovPath = path.join(rawNovDir, 'idea_01.md');
+    fs.writeFileSync(rawNovPath, [
+      'idea_id: "idea_01"',
+      'duplication_risk: low',
+      'closest_works: []',
+      'polish: "none"',
+      'note: "arXiv 检索未发现撞车工作"',
+      'confidence: 0.8',
+      '',
+    ].join('\n'), 'utf8');
+    assert.equal(wf.checkNoveltyReport(rawNovPath).ok, false, 'P1 #5：无代码块围栏的裸 YAML 查重报告必须被拒收');
+    const onlyTildeDir = path.join(p1LeadWs, 'papers', 'novelty', 'only_tilde');
+    fs.mkdirSync(onlyTildeDir, { recursive: true });
+    const onlyTildePath = path.join(onlyTildeDir, 'idea_01.md');
+    fs.writeFileSync(onlyTildePath, [
+      '~~~yaml',
+      'idea_id: "idea_01"',
+      'duplication_risk: low',
+      'closest_works: []',
+      'polish: "none"',
+      'note: "arXiv 检索未发现撞车工作"',
+      'confidence: 0.8',
+      '~~~',
+      '',
+    ].join('\n'), 'utf8');
+    assert.equal(wf.checkNoveltyReport(onlyTildePath).ok, false, 'P1 #5：单 ~~~ 围栏查重报告必须被拒收（仅接受 ```yaml）');
+
+    // P1 #6：parseVerdictText 反向勾选 go ☑ kill ☐ 与多形态复选框精确解析
+    assert.equal(val.parseVerdictText('# 裁决\n\ngo ☑  kill ☐\n').decision, 'go', 'P1 #6：反向勾选 go ☑ kill ☐ 必须解析为 go');
+    assert.equal(val.parseVerdictText('# 裁决\n\ngo ☐  revise ☑  kill ☐\n').decision, 'revise', 'P1 #6：反向勾选中间项必须解析为 revise');
+    assert.equal(val.parseVerdictText('# 裁决\n\n☐ go  ☑ kill\n').decision, 'kill', 'P1 #6：正向勾选 ☐ go ☑ kill 必须解析为 kill');
+    assert.equal(val.parseVerdictText('# 裁决\n\n☐ go ☑\n').decision, null, 'P1 #6：同词前后未选+已选冲突必须判空');
+    assert.equal(val.parseVerdictText('# 裁决\n\n☑ go ☐\n').decision, null, 'P1 #6：同词前后已选+未选冲突必须判空');
+    assert.equal(val.parseVerdictText('# 裁决\n\nDecision: go\n- [x] kill\n').decision, null, 'P1 #6：Decision 与复选框冲突必须判空');
+
+    // P2 #1 & New P2 #1：scanPendingVerdicts 拒绝冲突 votes: manifest（rc=1）且对仓外 ideas 目录联接 fail-closed（rc=1）
+    const conflictStatusRes = val.scanPendingVerdicts(p1LeadWs, { topic: 'leadcheck' });
+    assert.equal(conflictStatusRes.rc, 1, 'New P2 #1：含冲突 votes: codex / votes: none 的 manifest 必须让 status 返回 rc=1');
+    assert.ok(conflictStatusRes.buckets.unchecked.includes('idea_01'), 'New P2 #1：冲突 votes: 轮次必须计入 unchecked 桶');
+    if (process.platform === 'win32') {
+      const escStatusWs = mkTmp('p2-ideas-escape');
+      const escOutDir = mkTmp('p2-ideas-outside');
+      fs.symlinkSync(escOutDir, path.join(escStatusWs, 'ideas'), 'junction');
+      const escStatusRes = val.scanPendingVerdicts(escStatusWs);
+      assert.equal(escStatusRes.rc, 1, 'P2-1：ideas 指向仓外联接时 scanPendingVerdicts 必须 fail-closed 退 1');
+      assert.ok(escStatusRes.buckets.unchecked.includes('ideas'), 'P2-1：ideas 越界必须记录至 unchecked 桶');
+    }
+
+    // New P2 #3：file-lock 预置三层死亡残留（lock + .reap + .dead + 内层 .reap 守卫）也能自动自愈拿锁
+    const lockMod = await import('../lib/file-lock.mjs');
+    const lockWs = mkTmp('p2-deep-dead-lock');
+    const lockPath = path.join(lockWs, 'target.lock');
+    const deadPid = 99999991;
+    const writeDeadRec = (p, tag) => {
+      fs.writeFileSync(p, JSON.stringify({ pid: deadPid, at: Date.now() - 60000, nonce: tag }) + '\n', 'utf8');
+      const r = lockMod.readLockRecord(p);
+      const key = [r.ino || 0, Math.round(r.mtimeMs || 0), r.size || 0, r.pid || 0, r.at || 0, r.nonce || '', r.empty ? '1' : '0', r.corrupt ? '1' : '0'].join('|');
+      return crypto.createHash('sha256').update(key, 'utf8').digest('hex').slice(0, 16);
+    };
+    const fp0 = writeDeadRec(lockPath, 'dead-lock');
+    const claimPath = lockPath + '.reap.' + fp0;
+    const cfp = writeDeadRec(claimPath, 'dead-claim');
+    const metaPath = claimPath + '.dead.' + cfp;
+    const mfp = writeDeadRec(metaPath, 'dead-meta');
+    const guardPath = metaPath + '.reap.' + mfp;
+    writeDeadRec(guardPath, 'dead-guard');
+    let acquiredInside = false;
+    lockMod.withExclusiveFileLock(lockPath, () => { acquiredInside = true; }, { timeoutMs: 3000, retryMs: 25 });
+    assert.equal(acquiredInside, true, 'New P2 #3：即使内层 .dead.<cfp>.reap.<mfp> 守卫也归属死亡进程，锁必须自动自愈拿锁而非永久 BUSY');
+
+    // New P2 #4：对象 effort='none'/'off' 对齐合法清空；syncPanelLineupToSeats 严拒非法 effort 且不落盘篡改 seats.json
+    const tokNone = regMod.parseSlotSpecToken({ seat: 'codex', effort: 'none' });
+    const tokOff = regMod.parseSlotSpecToken({ seat: 'codex', effort: 'off' });
+    assert.equal(tokNone.effort, '', 'New P2 #4：对象 effort="none" 应合法清空');
+    assert.equal(tokNone.invalidEffort, undefined, 'New P2 #4：对象 effort="none" 不得报 invalidEffort');
+    assert.equal(tokOff.effort, '', 'New P2 #4：对象 effort="off" 应合法清空');
+    assert.equal(tokOff.invalidEffort, undefined, 'New P2 #4：对象 effort="off" 不得报 invalidEffort');
+    const seatsBeforeBadSync = fs.readFileSync(path.join(defWs, 'dispatch', 'seats.json'), 'utf8');
+    const badPanelSync1 = regMod.syncPanelLineupToSeats(defWs, 'dispatch/seats.json', { reviewVotes: [{ seat: 'codex', effort: 'hgh' }] });
+    assert.equal(badPanelSync1.ok, false, 'New P2 #4：面板写穿对象 reviewVotes 非法 effort 必须拒收');
+    assert.equal(badPanelSync1.code, 'INVALID_EFFORT');
+    const badPanelSync2 = regMod.syncPanelLineupToSeats(defWs, 'dispatch/seats.json', { scoutCommand: 'codex', scoutEffort: 'hgh' });
+    assert.equal(badPanelSync2.ok, false, 'New P2 #4：面板写穿 scoutEffort 非法值必须拒收');
+    assert.equal(badPanelSync2.code, 'INVALID_EFFORT');
+    assert.equal(fs.readFileSync(path.join(defWs, 'dispatch', 'seats.json'), 'utf8'), seatsBeforeBadSync, 'New P2 #4：非法面板配置拒收后绝不得篡改磁盘 seats.json');
+
+    // New P2（共享根目录歧义）：topic_a 与 topic_b 均含同 ID 同 SHA 工单，共享根 papers/novelty/idea_01.md 无 brief= 时双方均不得误归功
+    fs.rmSync(path.join(isoWs, 'papers', 'novelty'), { recursive: true, force: true });
+    fs.mkdirSync(path.join(isoWs, 'papers', 'novelty'), { recursive: true });
+    fs.writeFileSync(path.join(isoWs, 'papers', 'novelty', 'idea_01.md'), [
+      '<!-- meta role=novelty idea=idea_01 sha=' + sameBriefSha + ' -->',
+      '```yaml',
+      'idea_id: "idea_01"',
+      'duplication_risk: low',
+      'closest_works: []',
+      'polish: "none"',
+      'note: "arXiv 检索未发现撞车工作"',
+      'confidence: 0.85',
+      '```',
+      '',
+    ].join('\n'), 'utf8');
+    const snapAmbA = tel.buildSwarmSnapshot(isoWs, { topic: 'topic_a' });
+    const snapAmbB = tel.buildSwarmSnapshot(isoWs, { topic: 'topic_b' });
+    assert.equal(snapAmbA.ideas.find((x) => x.ideaId === 'idea_01')?.hasNovelty, false, 'New P2：无 brief= 共享根查重报告在多课题同 SHA 歧义时不得归功 topic_a');
+    assert.equal(snapAmbB.ideas.find((x) => x.ideaId === 'idea_01')?.hasNovelty, false, 'New P2：无 brief= 共享根查重报告在多课题同 SHA 歧义时不得归功 topic_b');
+
+    // 13) 终审精简清单收口回归（真实现有 YAML flow mapping 报告 / novelty --topic _flat / effort=off / summary 根外目录拦截 / 首次平铺 S2 遥测可见）
+    // (a) 本仓真实历史报告 papers/novelty/idea_12.md（含 YAML 行内映射 `- { venue, title, why_close }`）必须通过 checkNoveltyReport
+    const realIdea12Nov = path.resolve(SRC, '..', '..', 'papers', 'novelty', 'idea_12.md');
+    if (fs.existsSync(realIdea12Nov)) {
+      const r12 = wf.checkNoveltyReport(realIdea12Nov);
+      assert.equal(r12.ok, true, '收口 1：仓内真实查重报告 papers/novelty/idea_12.md 必须通过 checkNoveltyReport：' + r12.stderr);
+      assert.equal(Array.isArray(r12.data?.closest_works) && r12.data.closest_works.length, 5, '收口 1：YAML flow mapping 应解析出全部 5 篇 closest_works');
+      assert.ok(String(r12.data.closest_works[0]?.title || '').length > 0, '收口 1：每篇 flow mapping 必须解析出 title');
+    }
+
+    // (b) novelty idea_flat_only --topic _flat 按 ID 定位必须命中平铺 ideas/briefs/idea_flat_only.md（不得误查 ideas/_flat/briefs/）
+    const flatNovRc = await runMod.runNovelty({
+      root: defWs,
+      brief: 'idea_flat_only',
+      topic: '_flat',
+      dry: true,
+      noExitCode: true,
+      captureOnly: true,
+    });
+    assert.equal(flatNovRc, 0, '收口 2：novelty <id> --topic _flat 必须命中平铺 ideas/briefs/<id>.md 并预演通过');
+
+    // (c) effort='off' 阶段清空一致，且对象显式 effort='off' 不被 model@high 回填
+    const offStagePlan = regMod.resolveStagePlan(badObjCfg, 'scout', { effort: 'off', useDshPatch: false });
+    assert.equal(offStagePlan.ok, true, '收口 3：resolveStagePlan 必须接受 effort="off" 合法清空');
+    assert.equal(offStagePlan.effortCleared, true, '收口 3：effort="off" 必须置 effortCleared=true');
+    const tokOffOverride = regMod.parseSlotSpecToken({ seat: 'codex', model: 'gpt-5@high', effort: 'off' });
+    assert.equal(tokOffOverride.model, 'gpt-5', '收口 3：应剥除 model 尾部 @high');
+    assert.equal(tokOffOverride.effort, '', '收口 3：显式 effort="off" 绝不得被 model@high 回填成 high');
+
+    // (d) summarizeTopic(writeFile: false) 传入仓外 briefsDir 必须拦截退 2
+    const outsideSum = val.summarizeTopic(defWs, { briefsDir: '../outside-briefs', writeFile: false });
+    assert.equal(outsideSum.ok, false, '收口 4：summarizeTopic(writeFile:false) 必须拒绝仓外 briefsDir');
+    assert.equal(outsideSum.rc, 2);
+
+    // (e) 仅存在 ideas/default/、平铺尚无文件时，首次平铺 S2 运行期间桌面快照可见 _flat 与 activeRun
+    const freshFlatWs = mkTmp('flat-first-s2');
+    wf.initProject(freshFlatWs, { topic: 'default', force: false });
+    const flatS2Id = tel.startRunTelemetry(freshFlatWs, {
+      stage: 'S2',
+      topic: '_flat',
+      targetId: '_flat',
+      workers: [{ tag: 'codex', seat: 'codex', status: 'working', startedAt: Date.now() }],
+    });
+    const snapFreshFlat = tel.buildSwarmSnapshot(freshFlatWs);
+    assert.ok(snapFreshFlat.topics.some((t) => t.id === '_flat'), '收口 6：首次平铺 S2 运行时 discoverTopics 必须暴露 _flat 课题');
+    assert.equal(snapFreshFlat.activeRun && snapFreshFlat.activeRun.topic, '_flat', '收口 6：桌面快照应自动聚焦正在运行的首次平铺 S2 任务');
+    tel.finishRunTelemetry(freshFlatWs, flatS2Id, { status: 'done', rc: 0 });
   });
 
 } finally {

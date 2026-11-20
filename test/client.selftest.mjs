@@ -8,6 +8,7 @@
 //   · ModelPicker 彻底根治空模型死锁：常驻顶部搜索/自定义输入框、首项常驻恢复默认、0 模型可手输自定义回车选用；
 //   · 宿主 apply() + loader/volatile-update 自动写穿同步 lineup 至 dispatch/seats.json，且绝不触碰手写 model_override。
 import { pathToFileURL } from 'node:url';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -235,8 +236,8 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
     '候选数 ≤4（3 个）时打开弹层也始终渲染顶部搜索/自定义输入框');
   ok(capsOf(openTree).join('|') === 'Cline Pass|Qoder (订阅)', '供应商分组胶囊标题正常渲染');
   const openRows = rowsOf(openTree);
-  ok(openRows.length === 4 && txt(openRows[0]).includes('默认（使用该工具自身默认模型）'),
-    '未输入过滤词时首项常驻「默认（使用该工具自身默认模型）」（1 默认 + 3 预设 = 4 行）');
+  ok(openRows.length === 4 && txt(openRows[0]).includes('默认模型'),
+    '未输入过滤词时首项常驻「默认模型」（1 默认 + 3 预设 = 4 行）');
   const selRow = openRows.find((x) => x.props['aria-selected'] === 'true');
   ok(!!selRow && txt(byClass(selRow, /rdp-menu-name/)[0]) === 'Auto' && byClass(selRow, /rdp-menu-tick/).length === 1, '当前选中模型行带矢量勾选标记');
 
@@ -264,7 +265,7 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
   const zeroOpen = renderZero('');
   const zeroInput = byClass(zeroOpen, /rdp-menu-search/)[0];
   ok(!!zeroInput, '0 个已探测模型时打开弹层也始终渲染顶部输入框（绝不锁死）');
-  ok(rowsOf(zeroOpen).length === 1 && txt(rowsOf(zeroOpen)[0]).includes('默认（使用该工具自身默认模型）'),
+  ok(rowsOf(zeroOpen).length === 1 && txt(rowsOf(zeroOpen)[0]).includes('默认模型'),
     '0 个已探测模型时仍提供常驻默认项');
 
   // 用户在 0 模型弹层输入自定义模型名并按回车
@@ -329,7 +330,7 @@ ok(registered.def.id === 'research-dispatch' && registered.def.label() === '科�
   ok(threw, '连不上设置服务时 writePatch 显式报错');
 }
 
-// ── schema 的真实形状（15 字段完整覆盖）────────────────────────────────
+// ── schema 的真实形状（18 字段完整覆盖）────────────────────────────────
 const REAL_SCHEMA = {
   uid: 90,
   refs: {
@@ -337,13 +338,16 @@ const REAL_SCHEMA = {
     '7': { type: 'string', meta: { description: '座位表相对路径', default: 'dispatch/seats.json', volatile: true } },
     '11': { type: 'string', meta: { description: '文献调研环节执行工具', default: '', volatile: true } },
     '13': { type: 'string', meta: { description: '文献调研环节模型名', default: '', volatile: true } },
+    '14': { type: 'string', meta: { description: '文献调研思考强度', default: '', volatile: true } },
     '17': { type: 'string', meta: { description: '想法发散环节执行工具', default: '', volatile: true } },
     '21': { type: 'string', meta: { description: '想法发散环节模型名', default: '', volatile: true } },
+    '22': { type: 'string', meta: { description: '想法发散思考强度', default: '', volatile: true } },
     '25': { type: 'string', meta: { description: '想法发散单轮默认产出条数', default: '', volatile: true } },
     '29': { type: 'string', meta: { description: '想法发散历史死胡同过滤', default: '', volatile: true } },
     '33': { type: 'string', meta: { description: '评审票（可自由增删）', default: '', volatile: true } },
     '37': { type: 'string', meta: { description: '前置查重环节执行工具', default: '', volatile: true } },
     '41': { type: 'string', meta: { description: '前置查重环节模型名', default: '', volatile: true } },
+    '42': { type: 'string', meta: { description: '前置查重思考强度', default: '', volatile: true } },
     '45': { type: 'string', meta: { description: '只读：工具与候选模型目录', default: '', volatile: true } },
     '49': { type: 'string', meta: { description: '只读：工具安装状态', default: '', volatile: true } },
     '53': { type: 'string', meta: { description: '历史兼容字段', default: '', volatile: true } },
@@ -352,10 +356,10 @@ const REAL_SCHEMA = {
       type: 'object', meta: { default: {} },
       dict: {
         repoRoot: 3, seatsFile: 7,
-        scoutCommand: 11, scoutModel: 13,
-        divergeCommand: 17, divergeModel: 21, divergeCount: 25, divergeUseDeadEnds: 29,
+        scoutCommand: 11, scoutModel: 13, scoutEffort: 14,
+        divergeCommand: 17, divergeModel: 21, divergeEffort: 22, divergeCount: 25, divergeUseDeadEnds: 29,
         reviewVotes: 33,
-        noveltyCommand: 37, noveltyModel: 41,
+        noveltyCommand: 37, noveltyModel: 41, noveltyEffort: 42,
         executorCatalog: 45, executorStatus: 49,
         otherStages: 53, stageOpinions: 57,
       },
@@ -364,10 +368,10 @@ const REAL_SCHEMA = {
 };
 const ALL_KEYS = [
   'repoRoot', 'seatsFile',
-  'scoutCommand', 'scoutModel',
-  'divergeCommand', 'divergeModel', 'divergeCount', 'divergeUseDeadEnds',
+  'scoutCommand', 'scoutModel', 'scoutEffort',
+  'divergeCommand', 'divergeModel', 'divergeEffort', 'divergeCount', 'divergeUseDeadEnds',
   'reviewVotes',
-  'noveltyCommand', 'noveltyModel',
+  'noveltyCommand', 'noveltyModel', 'noveltyEffort',
   'executorCatalog', 'executorStatus',
   'otherStages', 'stageOpinions',
 ];
@@ -377,15 +381,15 @@ const ALL_KEYS = [
   ok(!!props && !('properties' in REAL_SCHEMA), 'fixture 为真实 { uid, refs } 形状');
   const desc = { ns: 'research-dispatch', revision: 7, user: {}, value: {}, schema: REAL_SCHEMA };
   const fields = mod.__test.fieldsOf(desc);
-  ok(fields.length === 15 && fields.map((f) => f.key).join(',') === ALL_KEYS.join(','),
-    '真实形状下 15 个字段完整列出且顺序一致（实际 ' + fields.length + ' 个）');
+  ok(fields.length === 18 && fields.map((f) => f.key).join(',') === ALL_KEYS.join(','),
+    '真实形状下 18 个字段完整列出且顺序一致（实际 ' + fields.length + ' 个）');
   ok(/schema\.refs/.test(globalThis.window.__researchDispatch.fieldSource || ''), '字段来自 schema.refs');
 }
 
 {
   const noSchema = { ns: 'research-dispatch', value: { reviewVotes: 'codex:gpt-5' } };
   const f2 = mod.__test.fieldsOf(noSchema);
-  ok(f2.length === 15, 'schema 缺失时合并完整 15 个已知字段（实际 ' + f2.length + ' 个）');
+  ok(f2.length === 18, 'schema 缺失时合并完整 18 个已知字段（实际 ' + f2.length + ' 个）');
   ok(f2.some((f) => f.key === 'scoutCommand' && f.title === '文献调研工具')
     && f2.some((f) => f.key === 'noveltyCommand' && f.title === '前置查重工具'),
     '兜底字段保留四阶段可读标题');
@@ -438,13 +442,16 @@ const FULL_VALUE = {
   seatsFile: 'dispatch/seats.json',
   scoutCommand: '',
   scoutModel: '',
+  scoutEffort: '',
   divergeCommand: '',
   divergeModel: '',
+  divergeEffort: '',
   divergeCount: '',
   divergeUseDeadEnds: '',
   reviewVotes: '',
   noveltyCommand: '',
   noveltyModel: '',
+  noveltyEffort: '',
   executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5;dsh:qoder/deepseek-v4-pro;agy:gemini-4-carbon-medium|gemini-4-carbon-high;kimi:kimi-k2-thinking',
   executorStatus: 'codex:1;claude:1;dsh:1;agy:0;kimi:1',
   otherStages: '',
@@ -473,7 +480,7 @@ const readyApi = {
   // JARGON 与内部键名零泄露
   const JARGON = /dispatch\/|\.sh\b|\.json|default_backends|seats\[|model_override|executor_override|subagent|tmux|kimi-k3|命名空间|网关/;
   ok(!page.texts.some((t) => JARGON.test(t)), '面板白话文案零内部文件名 / 字段名 / JARGON 泄露');
-  ok(!page.texts.some((t) => ['repoRoot', 'seatsFile', 'scoutCommand', 'divergeCommand', 'divergeCount', 'divergeUseDeadEnds', 'noveltyCommand', 'executorCatalog', 'executorStatus', 'otherStages', 'stageOpinions'].includes(t)),
+  ok(!page.texts.some((t) => ['repoRoot', 'seatsFile', 'scoutCommand', 'scoutEffort', 'divergeCommand', 'divergeEffort', 'divergeCount', 'divergeUseDeadEnds', 'noveltyCommand', 'noveltyEffort', 'executorCatalog', 'executorStatus', 'otherStages', 'stageOpinions'].includes(t)),
     '所有配置内部键名均由专用白话控件接管，不裸露在页面上');
   ok(page.texts.filter((t) => t === '高级项').length === 0, '无未知字段时不渲染「高级项」');
   ok(!/undefined/.test(page.texts.join(' ')), '无 undefined 泄漏');
@@ -928,8 +935,8 @@ const readyApi = {
       headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
       socket: { remoteAddress: '127.0.0.1' },
     }));
-    ok(!!liveSnap && liveSnap.version === '2.3.0' && liveSnap.catalog.includes('agy:'),
-      'v2.3.0：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
+    ok(!!liveSnap && liveSnap.version === '2.3.1' && liveSnap.catalog.includes('agy:'),
+      'v2.3.1：fetchBridgeSnapshot 走实时桥拉回最新本机五类 CLI（含 agy）模型目录');
 
     const catFromBridge = mod.__test.panelCatalog({ executorCatalog: '' }, { get: () => undefined }, null);
     ok(catFromBridge.some((c) => c.exec === 'agy' && c.models.length >= 6),
@@ -1030,10 +1037,11 @@ const readyApi = {
     // 3) 多路由 webServer 桥（/executors + /swarm-state + /action）+ 前端项目继承回显 + 科研拓扑 SVG 渲染 + 人工拍板写盘
     fs.mkdirSync(path.join(repo, 'ideas', 'demo-topic', 'briefs'), { recursive: true });
     fs.mkdirSync(path.join(repo, 'ideas', 'demo-topic', 'cards'), { recursive: true });
-    fs.writeFileSync(path.join(repo, 'ideas', 'demo-topic', 'briefs', 'idea_01.md'),
-      '# idea_01: Dual-Stage Sparse Gating\n\n<!-- meta isha=111122223333 bsha=444455556666 -->\n- 预测: +2.0\n- 主读数: acc\n- 判据: >= 2sigma\n', 'utf8');
+    const demoBriefText = '# idea_01: Dual-Stage Sparse Gating\n\n<!-- meta isha=111122223333 bsha=444455556666 -->\n- 预测: +2.0\n- 主读数: acc\n- 判据: >= 2sigma\n';
+    const demoBriefSha = crypto.createHash('sha256').update(demoBriefText.replace(/\r\n/g, '\n'), 'utf8').digest('hex').slice(0, 12);
+    fs.writeFileSync(path.join(repo, 'ideas', 'demo-topic', 'briefs', 'idea_01.md'), demoBriefText, 'utf8');
     fs.writeFileSync(path.join(repo, 'ideas', 'demo-topic', 'cards', 'idea_01.codex.md'), [
-      '<!-- meta role=reviewer idea=idea_01 seat=codex model=gpt-5 sha=aaaa11112222 -->',
+      '<!-- meta role=reviewer idea=idea_01 seat=codex model=gpt-5 sha=' + demoBriefSha + ' -->',
       '```yaml',
       'idea_id: idea_01',
       'reviewer: codex',
@@ -1044,8 +1052,17 @@ const readyApi = {
       'impl_cost: { score: 4, reason: "仅改 40 行" }',
       'expected_gain: { score: 4, reason: "越过 2sigma" }',
       'verdict: go',
+      'kill_reason: null',
+      'confidence: 0.85',
+      'missing_info: []',
       '```',
       '建议推进短探针核验。',
+      '',
+    ].join('\n'), 'utf8');
+    fs.writeFileSync(path.join(repo, 'ideas', 'demo-topic', 'cards', 'idea_01.manifest'), [
+      '<!-- manifest schema=2 idea=idea_01 sha=' + demoBriefSha + ' status=OK -->',
+      'votes: codex',
+      'codex → verdict: go',
       '',
     ].join('\n'), 'utf8');
     fs.writeFileSync(path.join(repo, 'ideas', 'demo-topic', '_summary.md'), [
@@ -1133,8 +1150,10 @@ const readyApi = {
       const pathInput = p22.inputs.find((p) => String(p.className || '').includes('rdp-in-path'));
       ok(pathInput && pathInput.value === repo,
         'v2.2.0：前端面板发现旧配置误存 .dsh/profiles/desktop 时自动净化为真实科研项目根目录');
-      ok(p22.texts.some((t) => t.includes('项目默认：')) && p22.texts.some((t) => t.includes('载入项目默认阵容微调')),
+      ok(p22.texts.some((t) => t.includes('项目默认：')) && p22.texts.some((t) => t.includes('载入默认')),
         'v2.2.0：面板留空时自动回显项目 seats.json 真实默认阵容与一键载入微调按钮');
+      ok(p22.buttons.filter((b) => String(b.className || '').includes('rdp-help-btn')).length >= 6,
+        'v2.3.2：冗余大段文字已收纳至问号悬停提示（rdp-help-btn）');
       const jargonHit = p22.texts.find((t) => JARGON_RE.test(t));
       ok(!jargonHit, 'v2.2.0：Bento 升级后的「阵容编排」页依然保持零底层术语泄漏' + (jargonHit ? '（命中：' + jargonHit + '）' : ''));
 
@@ -1149,8 +1168,119 @@ const readyApi = {
       const expandedSwarm = expandTree(p22.tree);
       const svgPaths = findAll(expandedSwarm, (n) => n.type === 'path' && String(n.props.className || '').includes('rdp-edge'));
       const svgNodes = findAll(expandedSwarm, (n) => n.type === 'g' && String(n.props.className || '').includes('rdp-gnode'));
+      const ideaChips = findAll(expandedSwarm, (n) => n.type === 'button' && String(n.props.className || '').includes('rdp-idea-chip'));
+      ok(ideaChips.length >= 1 && !textOf(ideaChips[0].props.children).includes('idea_01'),
+        'v2.3.3：候选方案胶囊不再暴露 idea_01 下划线内部代码名，改为自然标题/方案编号');
       ok(svgPaths.length >= 4 && svgNodes.length >= 5 && p22.texts.some((t) => t.includes('idea_01')) && p22.texts.some((t) => t.includes('21.0/25')),
         'v2.2.0：「科研拓扑」渲染 S0→S6 全链路、三次贝塞尔 /swarm 拓扑边与节点、以及 #1 idea_01 (21.0/25) 读数');
+
+      // [P1 #3] 缺省 expectedBriefSha 必须被宿主桥 400 拦截，不允许绕过版本指纹锁
+      let missingShaErr = '';
+      try {
+        await mod.__test.postDispatchAction({
+          kind: 'verdict',
+          repoRoot: repo,
+          topic: 'demo-topic',
+          ideaId: 'idea_01',
+          decision: 'kill',
+        }, mockFetch);
+      } catch (e) {
+        missingShaErr = String((e && e.message) || e);
+      }
+      ok(missingShaErr.includes('expectedBriefSha'),
+        'P1 #3：HTTP /action 缺省 expectedBriefSha 时显式拒绝写盘');
+
+      // [P1 #5] HTTP 回环桥拒绝操作未授权的外部 repoRoot（403）
+      const unauthDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-unauth-ws-'));
+      let unauthErr = '';
+      try {
+        await mod.__test.postDispatchAction({
+          kind: 'init',
+          repoRoot: unauthDir,
+        }, mockFetch);
+      } catch (e) {
+        unauthErr = String((e && e.message) || e);
+      } finally {
+        try { fs.rmSync(unauthDir, { recursive: true, force: true }); } catch {}
+      }
+      ok(unauthErr.includes('未授权'),
+        'P1 #5：HTTP 回环桥 /action 拒绝对未授权外部 repoRoot 执行写入或初始化');
+
+      // [P2 #17] 业务 404（BRIEF_NOT_FOUND）必须透出业务错误且不得误判为旧后台 SWARM_ROUTE_MISSING
+      let missingBriefErr = '';
+      try {
+        await mod.__test.postDispatchAction({
+          kind: 'verdict',
+          repoRoot: repo,
+          topic: 'demo-topic',
+          ideaId: 'idea_99',
+          expectedBriefSha: demoBriefSha,
+          decision: 'go',
+        }, mockFetch);
+      } catch (e) {
+        missingBriefErr = String((e && e.message) || e);
+      }
+      ok(missingBriefErr.includes('不存在') && mod.__test.isBackendOutdated({ ns: 'research-dispatch', schema: REAL_SCHEMA, value: {} }) === false,
+        'P2 #17：HTTP 404 业务错误（BRIEF_NOT_FOUND）透出可读业务提示且绝不误触发旧后台警告');
+
+      // [P2 #6] 通用路由器的普通 JSON 404（无桥接标识与业务 code）仍须准确判定为旧后台路由未挂载
+      const generic404Fetch = async () => ({
+        status: 404,
+        ok: false,
+        headers: { get: () => '' },
+        json: async () => ({ error: 'Not Found' }),
+      });
+      let generic404Err = '';
+      try {
+        await mod.__test.postDispatchAction({ kind: 'pool', repoRoot: repo }, generic404Fetch);
+      } catch (e) {
+        generic404Err = String((e && e.message) || e);
+      }
+      ok(generic404Err.includes('旧版进程') && mod.__test.isBackendOutdated({ ns: 'research-dispatch', schema: REAL_SCHEMA, value: {} }) === true,
+        'P2 #6：通用路由器 JSON 404（不含桥接响应头或业务 code）准确触发旧后台提示');
+      mod.__test.resetSwarmSnapshot();
+
+      // [新 P2-A] /executors 同样拦截未授权外部 repoRoot（403）
+      const unauthExecDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rd-unauth-exec-'));
+      let unauthExecStatus = 0;
+      try {
+        const respExec = await mockFetch('/api/research-dispatch/executors', {
+          method: 'POST',
+          body: JSON.stringify({ repoRoot: unauthExecDir, refresh: false }),
+        });
+        unauthExecStatus = respExec.status;
+      } finally {
+        try { fs.rmSync(unauthExecDir, { recursive: true, force: true }); } catch {}
+      }
+      ok(unauthExecStatus === 403,
+        '新 P2-A：/executors 接口同样拒绝读取未授权外部工作区配置（403）');
+
+      // [P1 #7] 动作发出 → 新轮询发出 → 动作先返回 v2 → 旧轮询晚返回 v1：共享快照必须保持 v2 不被回退
+      let releaseAction = null;
+      let releaseSlowPoll = null;
+      const actionPromise = mod.__test.postDispatchAction({ kind: 'pool', repoRoot: repo }, async () => new Promise((resolve) => {
+        releaseAction = () => resolve({
+          status: 200,
+          ok: true,
+          headers: { get: () => '1' },
+          json: async () => ({ ok: true, value: { ok: true }, snapshot: { repoRoot: repo, revTag: 'fresh-v2' } }),
+        });
+      }));
+      const slowPollPromise = mod.__test.fetchSwarmSnapshot({ repoRoot: repo }, async () => new Promise((resolve) => {
+        releaseSlowPoll = () => resolve({
+          status: 200,
+          ok: true,
+          headers: { get: () => '1' },
+          json: async () => ({ ok: true, value: { repoRoot: repo, revTag: 'stale-v1' } }),
+        });
+      }));
+      releaseAction();
+      await actionPromise;
+      releaseSlowPoll();
+      await slowPollPromise;
+      ok(mod.__test.swarmSnapshot() && mod.__test.swarmSnapshot().revTag === 'fresh-v2',
+        'P1 #7：动作发出→新轮询发出→动作先返回 v2→旧轮询晚返回 v1，共享快照保持 fresh-v2 不回退');
+      mod.__test.resetSwarmSnapshot();
 
       // 验证人类唯一裁决权：点击 KILL 裁决动作通过 /action 路由原子写入 verdict-idea_01.md 与 dead-ends.md
       const verdictResp = await mod.__test.postDispatchAction({
@@ -1158,6 +1288,7 @@ const readyApi = {
         repoRoot: repo,
         topic: 'demo-topic',
         ideaId: 'idea_01',
+        expectedBriefSha: demoBriefSha,
         decision: 'kill',
         reason: '机制与现有门控等价',
         deadEndLine: '禁止简单双阶段稀疏门控重命名',
@@ -1292,8 +1423,8 @@ const readyApi = {
       });
 
       let pDesktop = await settle(render());
-      ok(!!mod.__test.bridgeSnapshot() && mod.__test.bridgeSnapshot().version === '2.3.0',
-        'v2.3.0：Electron file:// 环境下无 HTTP fetch 时，自动走 connection.rpc 拉通执行者模型目录');
+      ok(!!mod.__test.bridgeSnapshot() && mod.__test.bridgeSnapshot().version === '2.3.1',
+        'v2.3.1：Electron file:// 环境下无 HTTP fetch 时，自动走 connection.rpc 拉通执行者模型目录');
 
       const toSwarmBtn = pDesktop.buttons.find((b) => textOf(b.children).includes('科研拓扑'));
       toSwarmBtn.onClick();
@@ -1313,6 +1444,7 @@ const readyApi = {
         repoRoot: repo,
         topic: 'demo-topic',
         ideaId: 'idea_01',
+        expectedBriefSha: demoBriefSha,
         decision: 'go',
         note: 'Electron RPC 拍板验收通过',
       });
@@ -1715,6 +1847,264 @@ const readyApi = {
       swTree = renderSwarm23();
       ok(pctOf(swTree) === '100%' && stageTrOf(swTree).includes('translate(490,260) scale(1)'),
         'v2.3.0：点击「重置视图」按钮一键将缩放与平移复位至 100% 初始坐标');
+
+      // ⑤ 模型思考强度（EffortPicker）与 /swarm Docked Tab / Verdict 台断言
+      ok(mod.__test.embeddedModelEffort('gemini-4-carbon-high') === 'high'
+        && mod.__test.embeddedModelEffort('kimi-k2-thinking') === 'thinking'
+        && mod.__test.embeddedModelEffort('gpt-5') === '',
+        'v2.3.1：embeddedModelEffort 准确识别 *-high / *-thinking 内置模型，不误判普通模型');
+
+      const parsedVotesEff = mod.__test.parseVoteRows('codex:gpt-5@high,agy:gemini-4-carbon-high@low,claude@xhigh');
+      ok(parsedVotesEff.length === 3
+        && parsedVotesEff[0].effort === 'high'
+        && parsedVotesEff[1].effort === ''
+        && parsedVotesEff[2].effort === 'xhigh'
+        && mod.__test.voteString(parsedVotesEff) === 'codex:gpt-5@high,agy:gemini-4-carbon-high,claude:@xhigh',
+        'v2.3.1：parseVoteRows / voteString 往返编码 @effort，并自动剥离内置强度模型上的多余覆盖');
+
+      // 验证 Prim.Menu 版 EffortPicker：selectable 调起 Prim.Menu(portal:true)、内置模型显示只读随模型、kimi 非 thinking 显示不支持
+      primCalls.Menu.length = 0;
+      hookState.length = 0;
+      const effApiValue = {
+        ...FULL_VALUE,
+        scoutCommand: 'codex',
+        scoutModel: 'gpt-5',
+        scoutEffort: '',
+        divergeCommand: 'kimi',
+        divergeModel: 'kimi-k2-thinking',
+        noveltyCommand: 'agy',
+        noveltyModel: 'gemini-4-carbon-high',
+        reviewVotes: 'codex:gpt-5@high,kimi:kimi-k2.5',
+      };
+      const effReadyApi = {
+        describe: async () => ({ ok: true, value: { namespaces: [{ ns: 'research-dispatch', revision: 9, user: {}, value: effApiValue, schema: REAL_SCHEMA }] } }),
+        update: async (_ns, patch) => { savedPatches.push(patch); return { ok: true, value: {} }; },
+      };
+      modWithPrim.apply({
+        slots: { inject: (n, fn) => { regPrimSlot = { slot: n, ...fn() }; }, register: (def, comp) => ({ def, comp }) },
+        get: () => undefined,
+        remote: { settings: effReadyApi },
+      });
+      registered = regPrimSlot;
+      let pEff = await settle(render());
+      const coupledBtns = pEff.buttons.filter((b) => b['data-effort-mode'] === 'coupled');
+      const unsupBtns = pEff.buttons.filter((b) => b['data-effort-mode'] === 'unsupported');
+      const selEffortBtns = pEff.buttons.filter((b) => b['data-effort-mode'] === 'selectable');
+      ok(coupledBtns.length === 2
+        && coupledBtns.every((b) => b.disabled === true && b['aria-disabled'] === 'true')
+        && coupledBtns.some((b) => txt23(b.children).includes('随模型 · thinking'))
+        && coupledBtns.some((b) => txt23(b.children).includes('随模型 · high')),
+        'v2.3.1：*-thinking 与 *-high 模型在界面呈现不可覆盖的只读「随模型」思考强度态');
+      ok(unsupBtns.length === 1 && unsupBtns[0].disabled === true && txt23(unsupBtns[0].children).includes('不透传'),
+        'v2.3.1：非内置 thinking 的不支持席位（如 kimi:kimi-k2.5）诚实标注默认不透传');
+      ok(selEffortBtns.length >= 2 && primCalls.Menu.some((m) => m.selectedId === 'high' && m.portal === true),
+        'v2.3.1：支持席位（codex:gpt-5）使用 Prim.Menu(portal:true) 展示可选思考强度');
+      // 点击文献调研 EffortPicker 触发打开菜单并选中 medium → 保存 scoutEffort
+      const scoutEffBtn = selEffortBtns.find((b) => String(b['aria-label'] || '').includes('由谁调研'));
+      scoutEffBtn.onClick();
+      pEff = render();
+      const medItem = pEff.buttons.find((b) => b['data-prim-item'] === 'medium');
+      ok(!!medItem, 'v2.3.1：点击思考强度选择器展开 Prim.Menu 含 默认 / low / medium / high / xhigh');
+      medItem.onClick();
+      pEff = render();
+      savedPatches = [];
+      pEff.buttons.find((b) => txt23(b.children) === '保存').onClick();
+      await tick(); await tick();
+      ok(savedPatches.length === 1 && savedPatches[0].scoutEffort === 'medium',
+        'v2.3.1：选择思考强度 medium 并保存后完整提交 scoutEffort: "medium"');
+
+      // 验证 /swarm 右侧 Dock 选项卡切换与常驻人类唯一裁决台（即使切换检视 Worker 节点也不消失）
+      mod.__test.setSwarmSnapshot({
+        ok: true,
+        repoRoot: repo,
+        repoName: '科研工作流',
+        initialized: true,
+        activeTopic: 'demo-topic',
+        stages: [{ id: 'S4', code: 'S4', title: '多票盲审', badge: '2 票', status: 'done' }],
+        ideas: [{ ideaId: 'idea_01', rank: 1, meanScore25: 21.0, voteCount: 2, verdict: 'pending' }],
+        graph: {
+          focusStage: 'S4',
+          focusIdeaId: 'idea_01',
+          nodes: [
+            {
+              id: 'w-codex',
+              x: 590,
+              y: 180,
+              kind: 'worker',
+              seat: 'codex',
+              title: 'codex 票',
+              subtitle: 'gpt-5 · high',
+              badge: '21/25 · GO',
+              status: 'done',
+              inspect: {
+                title: '盲审 Worker：codex',
+                dims: { novelty: 4, feasibility: 4, baseline_fit: 4, impl_cost: 5, expected_gain: 4 },
+                pushedInputs: [{ label: '唯一工单', rel: 'ideas/demo-topic/briefs/idea_01.md', sha: '112233445566' }],
+                preview: 'WORKER_RAW_PREVIEW_TOKEN',
+              },
+            },
+            {
+              id: 'gate-s5',
+              x: 848,
+              y: 255,
+              kind: 'gate',
+              title: '人类拍板',
+              subtitle: '21.0/25',
+              badge: '待裁决',
+              status: 'pending',
+              inspect: {
+                title: '人类裁决单',
+                canVerdict: true,
+                ideaId: 'idea_01',
+                metaRows: [['总均分', '21.0 / 25']],
+              },
+            },
+          ],
+          edges: [{ id: 'e-wg', from: 'w-codex', to: 'gate-s5', status: 'done' }],
+        },
+      });
+      hookState.length = 0;
+      swTree = renderSwarm23();
+      const workerG = find23(swTree, (n) => n.type === 'g' && String((n.props || {}).className || '').includes('rdp-gnode'))[0];
+      workerG.props.onClick();
+      swTree = renderSwarm23();
+      const verdictDockVisible = find23(swTree, (n) => String((n.props || {}).className || '').includes('rdp-verdict-dock')).length === 1;
+      const auditTabBtn = find23(swTree, (n) => n.type === 'button' && txt23((n.props || {}).children) === '隔离审计')[0];
+      ok(verdictDockVisible && !!auditTabBtn,
+        'v2.3.1：点击沙箱 Worker 后依然首屏固定展示人类裁决台，且右栏提供「隔离审计」选项卡');
+      auditTabBtn.props.onClick();
+      swTree = renderSwarm23();
+      const hasPreviewInAudit = find23(swTree, (n) => n.type === 'pre' && txt23((n.props || {}).children).includes('WORKER_RAW_PREVIEW_TOKEN')).length === 1;
+      ok(hasPreviewInAudit, 'v2.3.1：切换到「推式隔离审计」选项卡即刻展示推式隔离证明与原始证据预览');
+
+      // ⑥ Codex 复审回归（P0-02 缺 socket.remoteAddress 拒绝 / N20 乱序快照不覆盖 / P2-21 部分注册回滚与断链恢复）
+      ok(host.isLocalBridgeRequestAllowed({
+        headers: { host: '127.0.0.1:3080', origin: 'http://127.0.0.1:3080' },
+        socket: {},
+      }) === false, 'P0-02：缺失 socket.remoteAddress 的 HTTP 请求必须默认 fail-closed 拒绝');
+
+      // N20：乱序响应——先发慢请求、后发快请求，慢请求晚到绝不覆盖新快照
+      mod.__test.resetSwarmSnapshot();
+      mod.__test.setConnection(null);
+      let resolveSlow = null;
+      const slowPromise = new Promise((r) => { resolveSlow = r; });
+      const seqFetch = async (_u, init) => {
+        const body = JSON.parse(String((init && init.body) || '{}'));
+        if (body.topic === 'slow-old') {
+          await slowPromise;
+          return { status: 200, ok: true, json: async () => ({ ok: true, value: { repoRoot: repo, activeTopic: 'slow-old', ideas: [] } }) };
+        }
+        return { status: 200, ok: true, json: async () => ({ ok: true, value: { repoRoot: repo, activeTopic: 'fast-new', ideas: [] } }) };
+      };
+      const pSlow = mod.__test.fetchSwarmSnapshot({ repoRoot: repo, topic: 'slow-old' }, seqFetch);
+      const pFast = mod.__test.fetchSwarmSnapshot({ repoRoot: repo, topic: 'fast-new' }, seqFetch);
+      await pFast;
+      resolveSlow();
+      await pSlow;
+      ok(mod.__test.swarmSnapshot() && mod.__test.swarmSnapshot().activeTopic === 'fast-new',
+        'N20：迟到的旧拓扑快照响应被单调请求序号丢弃，不覆盖最新课题状态');
+
+      // P2-4：跨课题切换竞态——课题 A 的动作发起后切换到课题 B 并加载成功，随后 A 的动作迟到返回不得把共享快照回滚为 A
+      mod.__test.resetSwarmSnapshot();
+      let resolveActA = null;
+      const actAPromise = new Promise((r) => { resolveActA = r; });
+      const crossTopicFetch = async (url, init) => {
+        const body = JSON.parse(String((init && init.body) || '{}'));
+        if (String(url).includes('/action')) {
+          await actAPromise;
+          return {
+            status: 200,
+            ok: true,
+            json: async () => ({
+              ok: true,
+              snapshot: { repoRoot: repo, activeTopic: 'topic-a', ideas: [] },
+            }),
+          };
+        }
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({
+            ok: true,
+            value: { repoRoot: repo, activeTopic: body.topic || 'topic-b', ideas: [] },
+          }),
+        };
+      };
+      const pActA = mod.__test.postDispatchAction({ repoRoot: repo, topic: 'topic-a', action: 'run-brief', ideaId: 'idea_01' }, crossTopicFetch);
+      await mod.__test.fetchSwarmSnapshot({ repoRoot: repo, topic: 'topic-b' }, crossTopicFetch);
+      ok(mod.__test.swarmSnapshot() && mod.__test.swarmSnapshot().activeTopic === 'topic-b',
+        'P2-4 前置：切换到 topic-b 后快照应为 topic-b');
+      // 模拟 topic-b 加载后触发一次不带 topic 的自动轮询，其间 topic-a 动作迟到返回绝不得覆盖 topic-b
+      let resolveAutoPoll = null;
+      const autoPollGate = new Promise((r) => { resolveAutoPoll = r; });
+      const pAutoPoll = mod.__test.fetchSwarmSnapshot({ repoRoot: repo }, async () => {
+        await autoPollGate;
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({ ok: true, value: { repoRoot: repo, activeTopic: 'topic-b', ideas: [] } }),
+        };
+      });
+      resolveActA();
+      await pActA;
+      ok(mod.__test.swarmSnapshot() && mod.__test.swarmSnapshot().activeTopic === 'topic-b',
+        'P2-4：即便期间发起了不带 topic 的自动轮询，topic-a 的迟到动作快照也绝不得覆盖 topic-b');
+      resolveAutoPoll();
+      const autoPollVal = await pAutoPoll;
+      ok(autoPollVal && autoPollVal.activeTopic === 'topic-b' && mod.__test.swarmSnapshot().activeTopic === 'topic-b',
+        'P2-4：被拒的迟到动作不递增序号，后续 topic-b 自动轮询正常落地');
+
+      // P2-21：webServer 部分注册失败完整回滚，且 connection 注销后自动重挂 HTTP 备用路由
+      let regAttempt = 0;
+      let rollbackDisposed = 0;
+      host.apply({
+        logger: () => ({ info() {}, error() {} }),
+        inject: (deps, fn) => {
+          if (Array.isArray(deps) && deps.includes('webServer')) {
+            fn({
+              webServer: {
+                register: () => {
+                  regAttempt += 1;
+                  if (regAttempt === 2) throw new Error('second-route-boom');
+                  return () => { rollbackDisposed += 1; };
+                },
+              },
+              effect: (eff) => { eff(); },
+            });
+          }
+        },
+        on: () => () => {},
+      }, { repoRoot: repo });
+      ok(rollbackDisposed === 1, 'P2-21：webServer 第 2 条路由注册失败时自动回滚第 1 条已注册路由');
+
+      let connDisposeCb = null;
+      let webRegisteredCount = 0;
+      let webUnmountedCount = 0;
+      host.apply({
+        logger: () => ({ info() {}, error() {} }),
+        inject: (deps, fn) => {
+          if (Array.isArray(deps) && deps.includes('connection')) {
+            fn({
+              connection: { fetch: { register: () => () => {} } },
+              on: (ev, cb) => { if (ev === 'dispose') connDisposeCb = cb; },
+            });
+          } else if (Array.isArray(deps) && deps.includes('webServer')) {
+            fn({
+              webServer: {
+                register: () => {
+                  webRegisteredCount += 1;
+                  return () => { webUnmountedCount += 1; };
+                },
+              },
+              effect: (eff) => { eff(); },
+            });
+          }
+        },
+        on: () => () => {},
+      }, { repoRoot: repo });
+      if (typeof connDisposeCb === 'function') connDisposeCb();
+      ok(webRegisteredCount === 3 && webUnmountedCount === 0,
+        'P2-21：connection 通道卸载后自动重挂 3 条 HTTP 备用路由，恢复通道可用性');
 
       mod.__test.resetSwarmSnapshot();
     }

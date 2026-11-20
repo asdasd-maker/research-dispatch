@@ -41,7 +41,7 @@ mod.__test.setLiveGroups([
 ]);
 
 mod.__test.setBridgeSnapshot({
-  version: '2.3.0',
+  version: '2.3.1',
   catalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5|claude-opus-4-1;dsh:qoder/deepseek-v4-pro;agy:gemini-4-carbon-medium|gemini-4-carbon-high|claude-opus-5-5-high;kimi:kimi-k2-thinking',
   status: 'codex:1;claude:1;dsh:1;agy:1;kimi:1',
   defaultRepoRoot: '/workspace/my-research',
@@ -52,14 +52,14 @@ mod.__test.setBridgeSnapshot({
   ],
   projectLineup: {
     configured: true,
-    scout: { seat: 'agy', model: 'gemini-4-carbon-high', resolvedModel: 'gemini-4-carbon-high' },
-    diverge: { seat: 'kimi', model: 'kimi-k2-thinking', resolvedModel: 'kimi-k2-thinking', count: 10, useDeadEnds: true },
+    scout: { seat: 'agy', model: 'gemini-4-carbon-high', resolvedModel: 'gemini-4-carbon-high', effort: '', embeddedEffort: 'high', supportsEffort: true },
+    diverge: { seat: 'kimi', model: 'kimi-k2-thinking', resolvedModel: 'kimi-k2-thinking', effort: '', embeddedEffort: 'thinking', supportsEffort: false, count: 10, useDeadEnds: true },
     review: [
-      { tag: 'codex1', seat: 'codex', model: 'gpt-5', resolvedModel: 'gpt-5' },
-      { tag: 'claude', seat: 'claude', model: 'claude-sonnet-4-5', resolvedModel: 'claude-sonnet-4-5' },
-      { tag: 'dsh', seat: 'dsh', model: 'qoder/deepseek-v4-pro', resolvedModel: 'qoder/deepseek-v4-pro' },
+      { tag: 'codex1', seat: 'codex', model: 'gpt-5', resolvedModel: 'gpt-5', effort: 'high', embeddedEffort: '', supportsEffort: true },
+      { tag: 'claude', seat: 'claude', model: 'claude-sonnet-4-5', resolvedModel: 'claude-sonnet-4-5', effort: 'xhigh', embeddedEffort: '', supportsEffort: true },
+      { tag: 'dsh', seat: 'dsh', model: 'qoder/deepseek-v4-pro', resolvedModel: 'qoder/deepseek-v4-pro', effort: '', embeddedEffort: '', supportsEffort: true },
     ],
-    novelty: { seat: 'claude', model: 'claude-sonnet-4-5', resolvedModel: 'claude-sonnet-4-5' },
+    novelty: { seat: 'claude', model: 'claude-sonnet-4-5', resolvedModel: 'claude-sonnet-4-5', effort: 'high', embeddedEffort: '', supportsEffort: true },
   },
 });
 
@@ -68,13 +68,16 @@ const VALUE = {
   seatsFile: 'dispatch/seats.json',
   scoutCommand: 'agy',
   scoutModel: 'gemini-4-carbon-high',
+  scoutEffort: '',
   divergeCommand: 'kimi',
   divergeModel: 'kimi-k2-thinking',
+  divergeEffort: '',
   divergeCount: '10',
   divergeUseDeadEnds: 'true',
-  reviewVotes: 'codex:gpt-5,codex:o3,claude:claude-sonnet-4-5,dsh:qoder/deepseek-v4-pro',
+  reviewVotes: 'codex:gpt-5@high,codex:o3@medium,claude:claude-sonnet-4-5@xhigh,dsh:qoder/deepseek-v4-pro',
   noveltyCommand: 'claude',
   noveltyModel: 'claude-sonnet-4-5',
+  noveltyEffort: 'high',
   executorCatalog: 'codex:gpt-5|o3;claude:claude-sonnet-4-5|claude-opus-4-1;dsh:qoder/deepseek-v4-pro;agy:gemini-4-carbon-medium|gemini-4-carbon-high|claude-opus-5-5-high;kimi:kimi-k2-thinking',
   executorStatus: 'codex:1;claude:1;dsh:1;agy:1;kimi:1',
   otherStages: '',
@@ -87,13 +90,16 @@ const SCHEMA = {
     7: { type: 'string', meta: { description: '座位表相对路径；默认 dispatch/seats.json', default: 'dispatch/seats.json' } },
     11: { type: 'string', meta: { description: '文献调研环节执行工具', default: '' } },
     13: { type: 'string', meta: { description: '文献调研环节模型名', default: '' } },
+    14: { type: 'string', meta: { description: '文献调研思考强度', default: '' } },
     17: { type: 'string', meta: { description: '想法发散环节执行工具', default: '' } },
     21: { type: 'string', meta: { description: '想法发散环节模型名', default: '' } },
+    22: { type: 'string', meta: { description: '想法发散思考强度', default: '' } },
     25: { type: 'string', meta: { description: '想法发散单轮默认产出条数', default: '10' } },
     29: { type: 'string', meta: { description: '想法发散历史死胡同过滤', default: 'true' } },
     33: { type: 'string', meta: { description: '评审票（可自由增删，支持同工具多票）', default: '' } },
     37: { type: 'string', meta: { description: '前置查重环节执行工具', default: '' } },
     41: { type: 'string', meta: { description: '前置查重环节模型名', default: '' } },
+    42: { type: 'string', meta: { description: '前置查重思考强度', default: '' } },
     45: { type: 'string', meta: { description: '只读：本机探测到的工具与模型目录', default: '' } },
     49: { type: 'string', meta: { description: '只读：本机探测到的工具安装状态', default: '' } },
     53: { type: 'string', meta: { description: '历史兼容字段', default: '' } },
@@ -106,13 +112,16 @@ const SCHEMA = {
         seatsFile: 7,
         scoutCommand: 11,
         scoutModel: 13,
+        scoutEffort: 14,
         divergeCommand: 17,
         divergeModel: 21,
+        divergeEffort: 22,
         divergeCount: 25,
         divergeUseDeadEnds: 29,
         reviewVotes: 33,
         noveltyCommand: 37,
         noveltyModel: 41,
+        noveltyEffort: 42,
         executorCatalog: 45,
         executorStatus: 49,
         otherStages: 53,
@@ -197,42 +206,42 @@ mod.__test.setSwarmSnapshot({
     { id: 'S6', code: 'S6', title: '契约冻结', badge: '待立项', status: 'ready' },
   ],
   ideas: [
-    { ideaId: 'idea_04', rank: 1, title: 'Paired Entropy-Gated Rollout Pruning', meanScore25: 21.3, voteCount: 3, verdict: 'pending' },
-    { ideaId: 'idea_07', rank: 2, title: 'Layerwise Token-Budget Calibration', meanScore25: 19.5, voteCount: 3, verdict: 'go' },
-    { ideaId: 'idea_02', rank: 3, title: 'Dual-Anchor KL Warmup', meanScore25: 15.0, voteCount: 3, verdict: 'kill' },
+    { ideaId: 'idea_04', rank: 1, title: '配对熵门控剪枝（Paired Entropy-Gated Pruning）', meanScore25: 21.3, voteCount: 3, verdict: 'pending' },
+    { ideaId: 'idea_07', rank: 2, title: '分层 Token 预算校准', meanScore25: 19.5, voteCount: 3, verdict: 'go' },
+    { ideaId: 'idea_02', rank: 3, title: '双锚点 KL 预热策略', meanScore25: 15.0, voteCount: 3, verdict: 'kill' },
   ],
   graph: {
     focusStage: 'S4',
     focusIdeaId: 'idea_04',
     nodes: [
-      { id: 'in-brief', col: 0, x: 118, y: 165, kind: 'input', title: '隔离工单 idea_04.md', subtitle: 'Paired Entropy-Gated Pruning', badge: 'sha:9f81c2', status: 'done' },
-      { id: 'in-base', col: 0, x: 118, y: 345, kind: 'input', title: '基线尺子 BRIEF_BLOCK', subtitle: 'acc=78.4% (±0.3%, SIGNOFF)', badge: 'sha:4a10e8', status: 'done' },
-      { id: 'hub-s4', col: 1, x: 342, y: 255, kind: 'hub', title: 'S4 盲审扇出派工器', subtitle: '单单推式隔离 · 零横向串写', badge: '3 票扇出', status: 'working' },
-      { id: 'w-codex', col: 2, x: 590, y: 120, kind: 'worker', seat: 'codex', title: 'codex · 盲审票 1', subtitle: 'gpt-5 · os.tmpdir() 沙箱', badge: '22/25 · GO', durationMs: 19000, status: 'done' },
-      { id: 'w-claude', col: 2, x: 590, y: 255, kind: 'worker', seat: 'claude', title: 'claude · 盲审票 2', subtitle: 'claude-sonnet-4-5 · os.tmpdir()', badge: '21/25 · GO', durationMs: 24000, status: 'done' },
-      { id: 'w-agy', col: 2, x: 590, y: 390, kind: 'worker', seat: 'agy', title: 'agy · 盲审票 3', subtitle: 'gemini-4-carbon-high · 评审中', badge: '运行中', startedAt: Date.now() - 12000, status: 'working' },
+      { id: 'in-brief', col: 0, x: 118, y: 165, kind: 'input', title: '方案 4', subtitle: '配对熵门控剪枝', badge: '候选方案', status: 'done' },
+      { id: 'in-base', col: 0, x: 118, y: 345, kind: 'input', title: '基线对照', subtitle: '基准准确率 78.4% (±0.3%)', badge: '已验基线', status: 'done' },
+      { id: 'hub-s4', col: 1, x: 342, y: 255, kind: 'hub', title: '多票盲审', subtitle: '3 票并行 · 互不串写', badge: '3 票', status: 'working' },
+      { id: 'w-codex', col: 2, x: 590, y: 120, kind: 'worker', seat: 'codex', title: 'codex · 评审 1', subtitle: 'gpt-5', badge: '22/25 · GO', durationMs: 19000, status: 'done' },
+      { id: 'w-claude', col: 2, x: 590, y: 255, kind: 'worker', seat: 'claude', title: 'claude · 评审 2', subtitle: 'claude-sonnet-4-5', badge: '21/25 · GO', durationMs: 24000, status: 'done' },
+      { id: 'w-agy', col: 2, x: 590, y: 390, kind: 'worker', seat: 'agy', title: 'agy · 评审 3', subtitle: 'gemini-4-carbon-high', badge: '运行中', startedAt: Date.now() - 12000, status: 'working' },
       {
         id: 'gate-s5',
         col: 3,
         x: 848,
         y: 255,
         kind: 'gate',
-        title: 'Ranking #1 · 人类拍板',
-        subtitle: '总均分 21.3/25 · 2G/0R/0K',
-        badge: '待人类裁决',
+        title: '综合排名 #1',
+        subtitle: '均分 21.3/25 · 2 通过',
+        badge: '待裁决',
         status: 'pending',
         inspect: {
-          title: 'idea_04：Paired Entropy-Gated Rollout Pruning',
-          kindLabel: 'S4/S5 盲审汇总与人类裁决闸门',
+          title: '方案 4 · 配对熵门控剪枝',
+          kindLabel: '盲审汇总',
           fileRel: 'ideas/sparse-routing/verdict-idea_04.md',
           sha: '9f81c204ab11',
           canVerdict: true,
           ideaId: 'idea_04',
           topic: 'sparse-routing',
           metaRows: [
-            ['当前 Ranking', '#1 / 10（总均分 21.3 / 25）'],
-            ['票型分布', '2 GO · 0 REVISE · 0 KILL（第 3 票运行中）'],
-            ['物理沙箱校验', '全部 Worker 运行于 os.tmpdir() 独立目录'],
+            ['综合排名', '第 1 / 10 名 (21.3 / 25)'],
+            ['票型分布', '2 通过 · 0 修订 · 0 淘汰'],
+            ['沙箱校验', '独立临时目录'],
           ],
           pushedInputs: [
             { label: '唯一目标工单', rel: 'ideas/sparse-routing/briefs/idea_04.md', sha: '9f81c204ab11' },
@@ -295,6 +304,8 @@ const SVG_ATTR_MAP = {
   stdDeviation: 'stdDeviation',
   floodColor: 'flood-color',
   floodOpacity: 'flood-opacity',
+  fillOpacity: 'fill-opacity',
+  clipPath: 'clip-path',
   dur: 'dur',
   repeatCount: 'repeatCount',
   path: 'path',
@@ -321,7 +332,7 @@ function attr(k, v, tag) {
     return s ? ' style="' + esc(s) + '"' : '';
   }
   if (SVG_ATTR_MAP[k]) return ' ' + SVG_ATTR_MAP[k] + '="' + esc(v) + '"';
-  if (k.startsWith('data-') || ['value', 'placeholder', 'type', 'min', 'max', 'title', 'role', 'aria-label', 'aria-hidden', 'aria-selected', 'aria-checked', 'aria-haspopup', 'aria-expanded'].includes(k)) {
+  if (k.startsWith('data-') || ['value', 'placeholder', 'type', 'min', 'max', 'title', 'role', 'aria-label', 'aria-hidden', 'aria-disabled', 'aria-selected', 'aria-checked', 'aria-haspopup', 'aria-expanded'].includes(k)) {
     return ' ' + k + '="' + esc(v) + '"';
   }
   return '';
@@ -395,7 +406,7 @@ const DARK = [
 
 const css = mod.__test.CSS();
 const html = '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
-  + '<title>科研派工 v2.3.0 · dsh-claude-style 极简编排工作台 &amp; 可平移缩放 /swarm 拓扑星图预览</title><style>'
+  + '<title>科研派工 v2.3.1 · dsh-claude-style 极简编排工作台 &amp; 可平移缩放 /swarm 拓扑星图预览</title><style>'
   + '*{box-sizing:border-box}body{margin:0;padding:28px;background:#e9e7df;font-family:ui-sans-serif,-apple-system,"Segoe UI",system-ui,sans-serif}'
   + '.wrap{display:grid;grid-template-columns:1fr 1fr;gap:24px;max-width:1820px;margin:0 auto}'
   + '.wrap-single{max-width:1820px;margin:0 auto 24px}'
@@ -422,7 +433,9 @@ const html = '<!doctype html><html lang="zh"><head><meta charset="utf-8">'
   + '<div style="position:relative;width:300px;height:420px">' + demoHtml + '</div>'
   + '<p class="cap" style="margin-top:24px">同一弹层 · 输入自定义模型名后</p>'
   + '<div style="position:relative;width:300px;height:260px">' + demoHtmlFiltered + '</div></div>'
-  + '</div></body></html>\n';
+  + '</div>'
+  + '<script>(function(){var aw=null;function pos(w){var p=w&&w.querySelector(".rdp-help-pop");if(!p)return;var r=w.getBoundingClientRect(),vw=window.innerWidth||1280,vh=window.innerHeight||800,mw=Math.min(260,Math.max(180,vw-24));p.style.maxWidth=mw+"px";var pw=p.offsetWidth||mw,ph=p.offsetHeight||56,side=w.getAttribute("data-tip-side"),rt=r.top-12,rb=vh-r.bottom-12;var pl=side==="bottom"?(rb>=ph||rb>=rt?"bottom":"top"):(rt<ph&&rb>rt?"bottom":"top");p.style.left=Math.round(Math.max(12,Math.min(vw-pw-12,r.left+r.width/2-pw/2)))+"px";p.style.top=Math.round(pl==="bottom"?Math.min(vh-ph-12,r.bottom+7):Math.max(ph+12,r.top-7))+"px";p.style.transform=pl==="bottom"?"translateY(0)":"translateY(-100%)";}function sync(){if(aw&&document.contains(aw))pos(aw);else aw=null;}document.addEventListener("mouseover",function(e){var w=e.target&&e.target.closest&&e.target.closest(".rdp-help-wrap");if(w){aw=w;pos(w);}});document.addEventListener("focusin",function(e){var w=e.target&&e.target.closest&&e.target.closest(".rdp-help-wrap");if(w){aw=w;pos(w);}});document.addEventListener("mouseout",function(e){if(aw&&e.target&&e.target.closest&&e.target.closest(".rdp-help-wrap")===aw&&(!e.relatedTarget||!aw.contains(e.relatedTarget)))aw=null;});document.addEventListener("focusout",function(){if(aw&&(!document.activeElement||!aw.contains(document.activeElement)))aw=null;});window.addEventListener("scroll",sync,true);window.addEventListener("resize",sync,{passive:true});document.addEventListener("keydown",function(e){if(e.key==="Escape"&&document.activeElement&&document.activeElement.classList&&document.activeElement.classList.contains("rdp-help-btn"))document.activeElement.blur();});})();</script>'
+  + '</body></html>\n';
 
 const out = path.join(path.dirname(fileURLToPath(import.meta.url)), 'preview.html');
 fs.writeFileSync(out, html.replace(/\r\n/g, '\n'), 'utf8');

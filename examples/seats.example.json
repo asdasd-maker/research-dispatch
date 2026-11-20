@@ -66,6 +66,13 @@
             "-m",
             "{env}"
           ]
+        },
+        {
+          "env": "CODEX_EFFORT",
+          "argv": [
+            "-c",
+            "model_reasoning_effort={env}"
+          ]
         }
       ],
       "identity": {
@@ -99,6 +106,13 @@
             "--model",
             "{env}"
           ]
+        },
+        {
+          "env": "CLAUDE_EFFORT",
+          "argv": [
+            "--effort",
+            "{env}"
+          ]
         }
       ],
       "identity": {
@@ -124,6 +138,7 @@
       "payload_position": "argv",
       "output": "stdout",
       "patch_env": "DSH_PATCH",
+      "patch_default": "dispatch/dsh-review.patch.yml",
       "optional_args": [
         {
           "env": "DSH_PATCH",
@@ -158,6 +173,13 @@
           "env": "AGY_MODEL",
           "argv": [
             "--model",
+            "{env}"
+          ]
+        },
+        {
+          "env": "AGY_EFFORT",
+          "argv": [
+            "--effort",
             "{env}"
           ]
         }

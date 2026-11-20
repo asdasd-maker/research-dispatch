@@ -1,0 +1,13 @@
+# 评审卡专用的 dsh headless overlay（非破坏性，不碰 ~/.dsh 任何文件）
+#
+#   DSH_PERMISSION_MODE=read-only dsh --profile headless \
+#     --patch dispatch/dsh-review.patch.yml "<payload>"
+#
+# 1) 关掉 agent-instructions，防止 ~/.dsh/AGENTS.md 注入 headless 会话导致各票输入不对等；
+# 2) 关掉全局 cordis.patch.yml 连带注入 headless 的 UI skin，避免启动报 ERR_MODULE_NOT_FOUND。
+
+- id: agent-instructions
+  disabled: true
+
+- id: ui-skin-whale-song
+  disabled: true

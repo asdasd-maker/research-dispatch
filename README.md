@@ -1,15 +1,15 @@
 # research-dispatch
 
-**Universal Pure-Node AI Research Workflow Engine (`v2.3.0`)**
+**Universal Pure-Node AI Research Workflow Engine (`v2.3.1`)**
 *Literature Scout (LaTeX/Markdown-First) → Baseline Repro Gate → Dual-Mode Divergence → Out-of-Repo Multi-Agent Blind Review & Ranked 5D Summary → Pre-Contract Novelty & Paired `2σ` Pilot Stats → Human Verdict → Frozen Experiment Contract.*
 
 普适纯 Node 科研流程引擎：把「文献调研成池（优先抓取 arXiv LaTeX/Markdown 免 PDF 乱序）→ 基线复现签字 → 双模式候选发散（默认 10 条，支持挂载死胡同记忆或纯空白零锚定模式）→ 仓外物理隔离的多 Agent 盲审与五维 `/25` 自动 Ranking 总表 → 单工单隔离前置查重与 ≤2h Pilot 配对统计探针 → 人类唯一裁决 → 实验与消融契约哈希冻结」做成一套**零外部脚本依赖、跨主流 AI 编程宿主开箱即用**的确定性流水线。
 
-> **English Overview**: `research-dispatch` v2.3.0 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity (`agy`)**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
+> **English Overview**: `research-dispatch` v2.3.1 is a host-agnostic, zero-Bash / zero-Python Node.js (`>=20`) research workflow engine. Run `npx research-dispatch init` inside any repository to scaffold `AGENTS.md`, `CLAUDE.md` (`@AGENTS.md`), `skills/research-flow/SKILL.md`, and `dispatch/seats.json`—ready immediately for **Antigravity (`agy`)**, **Claude Code**, **Codex CLI**, **Cursor / Cline / Windsurf**, **Kimi Code**, and **DeepSeek Harness (DSH)**. External CLI workers across all 4 AI stages (`scout`, `diverge`, `review`, `novelty`) execute inside ephemeral `os.tmpdir()` sandboxes outside your `.git` tree so root `AGENTS.md` / `CLAUDE.md` and sibling briefs never leak into worker prompts.
 
 ---
 
-## 核心特性（v2.3.0）
+## 核心特性（v2.3.1）
 
 - **四大 AI 阶段全流程独立编排（`scout` / `diverge` / `review` / `novelty`）**：
   - **S0 文献调研（`scout`）**：自动读取 `roles/scout.md`、注入已有文献去重清单、要求优先提取 arXiv LaTeX/HTML/Markdown 源码信息，自动切分多卡、逐张执行 `check-paper`（坏卡隔离至 `rejected/`），支持 `--pool` 一键刷新 `papers/cards/_pool.md`。
@@ -34,7 +34,7 @@
 npm i -D git+https://github.com/asdasd-maker/research-dispatch.git
 
 # 方式 B：从 GitHub Release 离线归档安装
-npm i -D ./research-dispatch-2.3.0.tgz
+npm i -D ./research-dispatch-2.3.1.tgz
 
 # 方式 C：克隆仓库后全局 link（多课题共用）
 git clone https://github.com/asdasd-maker/research-dispatch.git
@@ -82,14 +82,18 @@ npx research-dispatch agents --json
 ### 2. 一行命令编排四阶段阵容与发散策略
 
 ```bash
-# 独立指定文献调研(scout)、想法发散(diverge + 默认条数与死胡同开关)、多票盲审(review)与前置查重(novelty)：
+# 独立指定文献调研(scout)、想法发散(diverge + 默认条数与死胡同开关)、多票盲审(review)与前置查重(novelty)，支持可选 @<effort> 思考强度后缀（low/medium/high/xhigh/max）：
 npx research-dispatch lineup \
   --scout agy:gemini-4-carbon-high \
   --diverge agy:gemini-4-carbon-high \
   --diverge-count 10 \
   --use-dead-ends \
-  --review codex:gpt-5,claude:claude-sonnet-4-5,kimi:kimi-k2.5 \
-  --novelty claude:claude-sonnet-4-5
+  --review codex:gpt-5@high,claude:claude-sonnet-4-5@max,kimi:kimi-k2.5 \
+  --novelty claude:claude-sonnet-4-5@high
+
+# 单次运行覆盖或清除思考强度（传 --effort default 显式回退工具默认，不再继承 lineup 或席位环境变量）：
+npx research-dispatch diverge "方向" 10 --topic <slug> --baseline baselines/<name> --effort high --dry
+npx research-dispatch diverge "方向" 10 --topic <slug> --baseline baselines/<name> --effort default --dry
 
 # 切换默认发散策略为纯空白零历史锚定模式（默认不挂载 dead-ends.md）：
 npx research-dispatch lineup --diverge-count 8 --no-dead-ends
@@ -118,17 +122,18 @@ npx research-dispatch lineup --reset
       "use_dead_ends": true
     },
     "review": [
-      { "seat": "codex", "model": "gpt-5" },
-      { "seat": "claude", "model": "claude-sonnet-4-5" },
+      { "seat": "codex", "model": "gpt-5", "effort": "high" },
+      { "seat": "claude", "model": "claude-sonnet-4-5", "effort": "max" },
       { "seat": "kimi", "model": "kimi-k2.5" }
     ],
-    "novelty": { "seat": "claude", "model": "claude-sonnet-4-5" }
+    "novelty": { "seat": "claude", "model": "claude-sonnet-4-5", "effort": "high" }
   }
 }
 ```
 
-- **配置优先级**：
-  `单次 CLI 参数 / 环境变量（BACKENDS / --agent / SCOUT_AGENT / DIVERGE_AGENT / NOVELTY_AGENT）` > `（DSH 宿主内）设置面板实时值（保存时同步写穿 seats.json）` > `dispatch/seats.json 的 lineup` > `dispatch/seats.json 的 default_backends`。
+- **配置与思考强度（Reasoning Effort）优先级**：
+  - 阵容优先级：`单次 CLI 参数 / 环境变量（BACKENDS / --agent / --effort / SCOUT_AGENT / DIVERGE_AGENT / NOVELTY_AGENT / *_EFFORT）` > `（DSH 宿主内）设置面板实时值（保存时同步写穿 seats.json）` > `dispatch/seats.json 的 lineup` > `dispatch/seats.json 的 default_backends`。
+  - 思考强度规则：支持 `low / medium / high / xhigh / max`（不同 CLI 按各自能力映射，如 `claude` 支持 `max`、`codex`/`agy` 支持 `xhigh`、`dsh` 按激活 profile `cordis.patch.yml` 白名单安全过滤）；传入 `--effort default` 会显式清除阵容与环境变量覆盖并回退工具默认；模型名已内置档位（如 `*-high`、`*-thinking`）时自动锁定随模型，不支持独立参数的席位（如 `kimi`、`api`）安全忽略；非法档位直接报错不静默回退。
 
 ---
 

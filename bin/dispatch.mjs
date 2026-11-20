@@ -174,7 +174,8 @@ function resolveStage(cfg, stageName, opts = {}) {
 function formatStageLineupEntry(stObj, fallbackText = '默认（按配置）') {
   if (!stObj) return fallbackText;
   if (typeof stObj === 'string') return stObj;
-  const base = stObj.model ? (stObj.seat + ':' + stObj.model) : (stObj.seat || fallbackText);
+  let base = stObj.model ? (stObj.seat + ':' + stObj.model) : (stObj.seat || fallbackText);
+  if (stObj.effort && stObj.seat) base += '@' + stObj.effort;
   const extras = [];
   if (stObj.count !== undefined && stObj.count !== null) extras.push('count=' + stObj.count);
   if (stObj.use_dead_ends !== undefined && stObj.use_dead_ends !== null) {
@@ -190,6 +191,7 @@ const USAGE = [
   '    init [目录] [--force] [--topic <slug>]       在项目目录生成跨宿主研究流水线骨架（AGENTS.md / seats.json / 模板）',
   '    agents [--json] [--refresh]                  探测本机已安装的 CLI Agent、API 环境变量及可用模型目录',
   '    lineup [--scout <spec>] [--diverge <spec>]   查看或持久化更新项目 dispatch/seats.json 的四阶段阵容与发散策略',
+  '           [--scout-effort <lv>] [--diverge-effort <lv>] [--novelty-effort <lv>]',
   '           [--diverge-count <N>] [--use-dead-ends | --no-dead-ends]',
   '           [--review <spec>] [--novelty <spec>] [--reset] [--require-unique-models] [--json]',
   '',
@@ -306,7 +308,7 @@ export async function main(argv) {
     }
     if (res.lineup) {
       const revStr = Array.isArray(res.lineup.review) && res.lineup.review.length > 0
-        ? res.lineup.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat)).join(', ')
+        ? res.lineup.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat) + (r.effort ? ('@' + r.effort) : '')).join(', ')
         : res.lineup.default_backends.join(', ');
       const scoutStr = formatStageLineupEntry(res.lineup.scout, '默认（跟随发散/配置）');
       const divStr = formatStageLineupEntry(res.lineup.diverge, '默认（按配置）');
@@ -336,7 +338,7 @@ export async function main(argv) {
     }
     const p = parseCliFlags(normRest, {
       booleans: ['reset', 'json', 'require-unique-models', 'no-require-unique-models', 'use-dead-ends', 'no-dead-ends'],
-      strings: ['scout', 'diverge', 'diverge-count', 'review', 'novelty'],
+      strings: ['scout', 'scout-effort', 'diverge', 'diverge-effort', 'diverge-count', 'review', 'novelty', 'novelty-effort'],
     });
     if (!p.ok) {
       process.stderr.write('✗ ' + p.error + '\n');
@@ -372,22 +374,28 @@ export async function main(argv) {
     }
 
     const hasMutation = p.flags.scout !== undefined
+      || p.flags['scout-effort'] !== undefined
       || p.flags.diverge !== undefined
+      || p.flags['diverge-effort'] !== undefined
       || divergeCount !== undefined
       || useDeadEnds !== undefined
       || p.flags.review !== undefined
       || p.flags.novelty !== undefined
+      || p.flags['novelty-effort'] !== undefined
       || Boolean(p.flags.reset)
       || requireUniqueModels !== undefined;
 
     if (hasMutation) {
       const updated = updateLineup(root, {
         scout: p.flags.scout,
+        scoutEffort: p.flags['scout-effort'],
         diverge: p.flags.diverge,
+        divergeEffort: p.flags['diverge-effort'],
         divergeCount,
         useDeadEnds,
         review: p.flags.review,
         novelty: p.flags.novelty,
+        noveltyEffort: p.flags['novelty-effort'],
         reset: Boolean(p.flags.reset),
         requireUniqueModels,
       });
@@ -397,7 +405,7 @@ export async function main(argv) {
         process.stdout.write('✓ 已更新项目阵容配置: ' + updated.file + '\n');
         const ln = updated.lineup || {};
         const rev = Array.isArray(ln.review)
-          ? ln.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat)).join(', ')
+          ? ln.review.map((r) => (r.model ? (r.seat + ':' + r.model) : r.seat) + (r.effort ? ('@' + r.effort) : '')).join(', ')
           : updated.default_backends.join(', ');
         process.stdout.write('  调研座位 (scout)  : ' + formatStageLineupEntry(ln.scout, '默认（跟随发散/配置）') + '\n');
         process.stdout.write('  发散座位 (diverge): ' + formatStageLineupEntry(ln.diverge, '默认（按配置）') + '\n');
@@ -417,16 +425,17 @@ export async function main(argv) {
       config: cfg.__file,
       source: planRes.source,
       require_unique_models: Boolean(cfg.policy && cfg.policy.require_unique_models === true),
-      scout: scoutRes.ok ? { source: scoutRes.source, seat: scoutRes.seatId, model: scoutRes.model || '' } : { error: scoutRes.error },
+      scout: scoutRes.ok ? { source: scoutRes.source, seat: scoutRes.seatId, model: scoutRes.model || '', effort: scoutRes.effort || '' } : { error: scoutRes.error },
       diverge: divRes.ok ? {
         source: divRes.source,
         seat: divRes.seatId,
         model: divRes.model || '',
+        effort: divRes.effort || '',
         count: divRes.defaultCount ?? 10,
         use_dead_ends: divRes.defaultUseDeadEnds !== false,
       } : { error: divRes.error },
       review: planRes.ok ? planRes.slots : [],
-      novelty: novRes.ok ? { source: novRes.source, seat: novRes.seatId, model: novRes.model || '' } : { error: novRes.error },
+      novelty: novRes.ok ? { source: novRes.source, seat: novRes.seatId, model: novRes.model || '', effort: novRes.effort || '' } : { error: novRes.error },
       ...(planRes.ok ? {} : { error: planRes.error }),
     };
     if (p.flags.json) {
@@ -435,26 +444,26 @@ export async function main(argv) {
       process.stdout.write('当前生效阵容 (' + cfg.__file + ')：\n');
       if (scoutRes.ok) {
         process.stdout.write('  调研 (source=' + scoutRes.source + '): '
-          + scoutRes.seatId + (scoutRes.model ? (':' + scoutRes.model) : '') + '\n');
+          + scoutRes.seatId + (scoutRes.model ? (':' + scoutRes.model) : '') + (scoutRes.effort ? ('@' + scoutRes.effort) : '') + '\n');
       } else {
         process.stderr.write('  ✗ 调研配置异常: ' + scoutRes.error + '\n');
       }
       if (divRes.ok) {
         process.stdout.write('  发散 (source=' + divRes.source + '): '
-          + divRes.seatId + (divRes.model ? (':' + divRes.model) : '')
+          + divRes.seatId + (divRes.model ? (':' + divRes.model) : '') + (divRes.effort ? ('@' + divRes.effort) : '')
           + ' [count=' + (divRes.defaultCount ?? 10) + ', use_dead_ends=' + String(divRes.defaultUseDeadEnds !== false) + ']\n');
       } else {
         process.stderr.write('  ✗ 发散配置异常: ' + divRes.error + '\n');
       }
       if (planRes.ok) {
         process.stdout.write('  评审 (source=' + planRes.source + '): '
-          + planRes.slots.map((s) => (s.model ? (s.tag + '[' + s.seat + ':' + s.model + ']') : s.tag)).join(', ') + '\n');
+          + planRes.slots.map((s) => (s.model ? (s.tag + '[' + s.seat + ':' + s.model + (s.effort ? '@' + s.effort : '') + ']') : (s.tag + (s.effort ? '@' + s.effort : '')))).join(', ') + '\n');
       } else {
         process.stderr.write('  ✗ 评审计划异常: ' + planRes.error + '\n');
       }
       if (novRes.ok) {
         process.stdout.write('  查重 (source=' + novRes.source + '): '
-          + novRes.seatId + (novRes.model ? (':' + novRes.model) : '') + '\n');
+          + novRes.seatId + (novRes.model ? (':' + novRes.model) : '') + (novRes.effort ? ('@' + novRes.effort) : '') + '\n');
       } else {
         process.stderr.write('  ✗ 查重配置异常: ' + novRes.error + '\n');
       }
@@ -467,14 +476,14 @@ export async function main(argv) {
   if (cmd === 'scout') {
     const p = parseCliFlags(rest, {
       booleans: ['pool', 'dry'],
-      strings: ['cards', 'out', 'agent'],
+      strings: ['cards', 'out', 'agent', 'effort'],
     });
     if (!p.ok) {
       process.stderr.write('✗ ' + p.error + '\n');
       return 1;
     }
     if (p.pos.length === 0) {
-      process.stderr.write('用法: dispatch.mjs scout <调研方向> [篇数=5] [--cards <dir>] [--agent <seat[:model]>] [--pool] [--dry]\n');
+      process.stderr.write('用法: dispatch.mjs scout <调研方向> [篇数=5] [--cards <dir>] [--agent <seat[:model][@effort]>] [--effort <level>] [--pool] [--dry]\n');
       return 1;
     }
     if (p.pos.length > 2) {
@@ -488,6 +497,7 @@ export async function main(argv) {
       cardsDir: p.flags.cards,
       outFile: p.flags.out,
       agent: p.flags.agent,
+      effort: p.flags.effort,
       assemblePool: Boolean(p.flags.pool),
       dry: Boolean(p.flags.dry),
     });
@@ -546,7 +556,7 @@ export async function main(argv) {
   if (cmd === 'diverge') {
     const p = parseCliFlags(rest, {
       booleans: ['dry', 'no-baseline', 'no-dead-ends', 'use-dead-ends'],
-      strings: ['topic', 'baseline', 'pool', 'dead-ends', 'agent'],
+      strings: ['topic', 'baseline', 'pool', 'dead-ends', 'agent', 'effort'],
     });
     if (!p.ok) {
       process.stderr.write('✗ ' + p.error + '\n');
@@ -561,7 +571,7 @@ export async function main(argv) {
       return 1;
     }
     if (p.pos.length === 0) {
-      process.stderr.write('用法: dispatch.mjs diverge <方向描述> [条数=10] [--topic <slug>] [--baseline <dir>] [--pool <file>] [--dead-ends <file> | --no-dead-ends] [--agent <seat[:model]>] [--dry]\n');
+      process.stderr.write('用法: dispatch.mjs diverge <方向描述> [条数=10] [--topic <slug>] [--baseline <dir>] [--pool <file>] [--dead-ends <file> | --no-dead-ends] [--agent <seat[:model][@effort]>] [--effort <level>] [--dry]\n');
       return 1;
     }
     if (p.pos.length > 2) {
@@ -580,6 +590,7 @@ export async function main(argv) {
       noDeadEnds: p.flags['no-dead-ends'] ? true : undefined,
       useDeadEnds: p.flags['use-dead-ends'] ? true : undefined,
       agent: p.flags.agent,
+      effort: p.flags.effort,
       dry: Boolean(p.flags.dry),
     });
   }
@@ -690,6 +701,7 @@ export async function main(argv) {
         slot: sl.tag,
         seat: be,
         ...(voteModel ? { requested_model: voteModel } : {}),
+        ...(sl.effort ? { effort: sl.effort } : {}),
         kind: seat.kind,
         effective_kind: effKind,
         enabled: seat.enabled !== false,
@@ -779,14 +791,14 @@ export async function main(argv) {
   if (cmd === 'novelty') {
     const p = parseCliFlags(rest, {
       booleans: ['dry'],
-      strings: ['topic', 'pool', 'out', 'agent'],
+      strings: ['topic', 'pool', 'out', 'agent', 'effort'],
     });
     if (!p.ok) {
       process.stderr.write('✗ ' + p.error + '\n');
       return 1;
     }
     if (p.pos.length === 0) {
-      process.stderr.write('用法: dispatch.mjs novelty <工单路径或ID> [--topic <slug>] [--pool <file>] [--out <file>] [--agent <seat[:model]>] [--dry]\n');
+      process.stderr.write('用法: dispatch.mjs novelty <工单路径或ID> [--topic <slug>] [--pool <file>] [--out <file>] [--agent <seat[:model][@effort]>] [--effort <level>] [--dry]\n');
       return 1;
     }
     if (p.pos.length > 1) {
@@ -800,6 +812,7 @@ export async function main(argv) {
       poolFile: p.flags.pool,
       outFile: p.flags.out,
       agent: p.flags.agent,
+      effort: p.flags.effort,
       dry: Boolean(p.flags.dry),
     });
   }
@@ -989,6 +1002,7 @@ export async function main(argv) {
             stage: 'review',
             executor: rp.slots.map((s) => s.seat).join(','),
             model: rp.slots.map((s) => s.model || '').filter(Boolean).join(','),
+            effort: rp.slots.map((s) => s.effort || '').filter(Boolean).join(','),
             slots: rp.slots,
             source: rp.source,
           };
@@ -999,6 +1013,7 @@ export async function main(argv) {
             stage: 'diverge',
             executor: dp.ok ? dp.seatId : '',
             model: dp.ok ? (dp.model || '') : '',
+            effort: dp.ok ? (dp.effort || '') : '',
             count: dp.defaultCount ?? 10,
             use_dead_ends: dp.defaultUseDeadEnds !== false,
             source: dp.source || 'default',
@@ -1010,6 +1025,7 @@ export async function main(argv) {
             stage: st,
             executor: sp.ok ? sp.seatId : '',
             model: sp.ok ? (sp.model || '') : '',
+            effort: sp.ok ? (sp.effort || '') : '',
             source: sp.source || 'default',
           };
         }

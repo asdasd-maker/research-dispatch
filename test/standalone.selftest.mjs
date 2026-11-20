@@ -1476,6 +1476,85 @@ try {
     assert.equal(discReset.lineup.review, null);
     assert.equal(discReset.lineup.novelty, null);
     assert.equal(discReset.lineup.require_unique_models, false);
+
+    // 6) v2.3.1 思考强度 effort 全链路解析、DSH 覆盖保护、写穿同步与不支持席位安全忽略
+    assert.equal(models.embeddedModelEffort('gemini-4-carbon-high'), 'high');
+    assert.equal(models.embeddedModelEffort('kimi-k2-thinking'), 'thinking');
+    assert.equal(models.embeddedModelEffort('gpt-5'), '');
+
+    registry.syncPanelLineupToSeats(syncRoot, 'dispatch/seats.json', {
+      scoutCommand: 'codex',
+      scoutModel: 'gpt-5',
+      scoutEffort: 'high',
+      divergeCommand: 'claude',
+      divergeModel: 'claude-sonnet-4-5',
+      divergeEffort: 'xhigh',
+      reviewVotes: 'codex:gpt-5@medium,agy:gemini-4-carbon-high@low,kimi:kimi-k2.5@high',
+      noveltyCommand: 'agy',
+      noveltyModel: 'claude-opus-5-5',
+      noveltyEffort: 'high',
+    });
+    const effJson = JSON.parse(fs.readFileSync(seatsAbs, 'utf8'));
+    assert.deepEqual(effJson.lineup.scout, { seat: 'codex', model: 'gpt-5', effort: 'high' });
+    assert.equal(effJson.lineup.diverge.effort, 'xhigh');
+    assert.equal(effJson.lineup.review[0].effort, 'medium');
+    assert.equal(effJson.lineup.review[1].effort, undefined, '内置 *-high 模型不写入覆盖 effort');
+    assert.deepEqual(effJson.lineup.novelty, { seat: 'agy', model: 'claude-opus-5-5', effort: 'high' });
+
+    const effCfg = registry.loadConfig(syncRoot, 'dispatch/seats.json', { useDshPatch: false });
+    const effRevPlan = registry.resolveExecutionPlan(effCfg, { useDshPatch: false });
+    assert.equal(effRevPlan.slots[0].effort, 'medium');
+    assert.equal(effRevPlan.slots[1].effort, '');
+    const exampleCfg = registry.loadConfig(SRC, 'examples/seats.example.json', { useDshPatch: false });
+    const codexEffArgv = registry.buildArgv(registry.findSeat(exampleCfg, 'codex'), { env: { CODEX_MODEL: 'gpt-5', CODEX_EFFORT: 'high' }, tmp: '/t', workersDir: '/w', payloadText: 'P' });
+    assert.ok(codexEffArgv.includes('-c') && codexEffArgv.includes('model_reasoning_effort=high'), 'codex optional_args 透传 model_reasoning_effort：' + JSON.stringify(codexEffArgv));
+    const claudeEffArgv = registry.buildArgv(registry.findSeat(exampleCfg, 'claude'), { env: { CLAUDE_MODEL: 'claude-sonnet-4-5', CLAUDE_EFFORT: 'xhigh' }, tmp: '/t', workersDir: '/w', payloadText: 'P' });
+    assert.ok(claudeEffArgv.includes('--effort') && claudeEffArgv.includes('xhigh'), 'claude optional_args 透传 --effort：' + JSON.stringify(claudeEffArgv));
+    const agyEffArgv = registry.buildArgv(registry.findSeat(exampleCfg, 'agy'), { env: { AGY_MODEL: 'claude-sonnet-4-6', AGY_EFFORT: 'medium' }, tmp: '/t', workersDir: '/w', payloadText: 'P' });
+    assert.ok(agyEffArgv.includes('--effort') && agyEffArgv.includes('medium'), 'agy optional_args 透传 --effort：' + JSON.stringify(agyEffArgv));
+    const codexArgvWithEffort = registry.buildArgv(
+      { id: 'codex', kind: 'cli', command: 'codex', argv: ['exec', '{optional_args}', '-'], optional_args: [] },
+      { env: { CODEX_EFFORT: 'high' }, workersDir: '/w', tmp: '/t', payloadText: 'P' },
+    );
+    assert.ok(codexArgvWithEffort.includes('-c') && codexArgvWithEffort.includes('model_reasoning_effort=high'), 'codex 自动兜底注入 -c model_reasoning_effort=high：' + JSON.stringify(codexArgvWithEffort));
+    const kimiArgvIgnored = registry.buildArgv(
+      registry.findSeat(effCfg, 'kimi'),
+      { env: { KIMI_MODEL: 'kimi-k2.5', KIMI_EFFORT: 'high' }, workersDir: '/w', tmp: '/t', payloadText: 'P' },
+    );
+    assert.ok(!kimiArgvIgnored.includes('--effort') && !kimiArgvIgnored.includes('high'), 'kimi 不支持席位安全忽略 effort：' + JSON.stringify(kimiArgvIgnored));
+
+    // DSH buildDshModelOverrideFiles 在 catalog 声明受限 reasoningEfforts 时安全过滤，无 catalog 且显式传入时正常写入
+    const prevHomeEff = process.env.DSH_HOME;
+    const prevProfEff = process.env.DSH_PROFILE;
+    try {
+      const fakeDsh = mkTmp('dsh-eff');
+      process.env.DSH_HOME = fakeDsh;
+      process.env.DSH_PROFILE = 'headless';
+      fs.mkdirSync(path.join(fakeDsh, 'profiles', 'headless'), { recursive: true });
+      fs.writeFileSync(path.join(fakeDsh, 'profiles', 'headless', 'cordis.patch.yml'), [
+        '- id: llm-pi-ai',
+        '  config:',
+        '    providers:',
+        '      magpie:',
+        '        models:',
+        '          - id: deepseek-v4.1-flash',
+        '            reasoningEfforts:',
+        '              low: low',
+        '              high: high',
+        '              max: max',
+        '          - id: glm-5.3',
+      ].join('\n'));
+      const dshDir = mkTmp('dsh-out');
+      const ovHigh = buildDshModelOverrideFiles(dshDir, '', 'magpie/deepseek-v4.1-flash', 'dsh1', 'high');
+      assert.ok(fs.readFileSync(ovHigh.patchFile, 'utf8').includes('reasoningEffort: "high"'));
+      const ovXhigh = buildDshModelOverrideFiles(dshDir, '', 'magpie/deepseek-v4.1-flash', 'dsh2', 'xhigh');
+      assert.ok(fs.readFileSync(ovXhigh.patchFile, 'utf8').includes('reasoningEffort: "max"'), 'xhigh 映射为声明的 max');
+      const ovUnsup = buildDshModelOverrideFiles(dshDir, '', 'magpie/glm-5.3', 'dsh3', 'high');
+      assert.ok(!fs.readFileSync(ovUnsup.patchFile, 'utf8').includes('reasoningEffort'), '未声明 reasoningEfforts 的模型安全跳过避免 UNSUPPORTED_REASONING_EFFORT');
+    } finally {
+      if (prevHomeEff === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = prevHomeEff;
+      if (prevProfEff === undefined) delete process.env.DSH_PROFILE; else process.env.DSH_PROFILE = prevProfEff;
+    }
   });
 
 } finally {
